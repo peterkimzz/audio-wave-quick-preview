@@ -192,6 +192,25 @@ struct AudioWaveQuickPreviewSpecs {
             )
         }
 
+        run("playback control presentation uses stable icons and labels") {
+            try expectEqual(
+                PlaybackControlPresentation.primaryControl(isPlaying: false),
+                PlaybackControlPresentation(
+                    systemImageName: "play.fill",
+                    accessibilityLabel: "Play",
+                    toolTip: "Play"
+                )
+            )
+            try expectEqual(
+                PlaybackControlPresentation.primaryControl(isPlaying: true),
+                PlaybackControlPresentation(
+                    systemImageName: "pause.fill",
+                    accessibilityLabel: "Pause",
+                    toolTip: "Pause"
+                )
+            )
+        }
+
         print("All specs passed")
     }
 }

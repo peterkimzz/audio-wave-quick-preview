@@ -4,11 +4,17 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    private enum PlaybackButtonStyle {
+        static let iconFont: Font = .system(size: 15, weight: .semibold)
+    }
+
     @ObservedObject var model: AppModel
     @State private var isDropTargeted = false
     @State private var showsAdvancedOptions = false
 
     var body: some View {
+        let playbackControl = PlaybackControlPresentation.primaryControl(isPlaying: model.isPlaying)
+
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -29,12 +35,24 @@ struct ContentView: View {
             }
 
             HStack(spacing: 12) {
-                Button(model.isPlaying ? "Pause" : "Play") {
+                Button {
                     model.togglePlayback()
+                }
+                label: {
+                    ZStack {
+                        Image(systemName: "play.fill")
+                            .opacity(playbackControl.systemImageName == "play.fill" ? 1 : 0)
+
+                        Image(systemName: "pause.fill")
+                            .opacity(playbackControl.systemImageName == "pause.fill" ? 1 : 0)
+                    }
+                    .font(PlaybackButtonStyle.iconFont)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.duration == 0)
                 .keyboardShortcut(.space, modifiers: [])
+                .help(playbackControl.toolTip)
+                .accessibilityLabel(playbackControl.accessibilityLabel)
 
                 Button("-10s") {
                     model.seekBackwardByKeyboardInterval()
