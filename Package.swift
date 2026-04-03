@@ -17,6 +17,10 @@ let package = Package(
             name: "AudioWaveQuickPreviewMac",
             targets: ["AudioWaveQuickPreviewMac"]
         ),
+        .executable(
+            name: "AudioWaveQuickPreviewSpecs",
+            targets: ["AudioWaveQuickPreviewSpecs"]
+        ),
     ],
     targets: [
         .target(
@@ -24,6 +28,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "AudioWaveQuickPreviewMac",
+            dependencies: ["AudioWaveQuickPreviewCore"]
+        ),
+        .executableTarget(
+            name: "AudioWaveQuickPreviewSpecs",
             dependencies: ["AudioWaveQuickPreviewCore"]
         ),
         .testTarget(

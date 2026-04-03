@@ -43,15 +43,30 @@ struct ContentView: View {
                 Text(TimeFormatter.string(from: model.duration))
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Go to Playhead") {
+                    model.centerOnPlayhead()
+                }
+                .disabled(model.viewport == nil)
+
+                Button("Reset Zoom") {
+                    model.resetZoom()
+                }
+                .disabled(model.viewport == nil)
             }
 
             WaveformView(
                 waveform: model.waveform,
                 segments: model.segments,
                 showsDetectedRegions: model.showsDetectedRegions,
+                viewport: model.viewport,
                 duration: model.duration,
                 currentTime: model.currentTime,
-                onSeek: model.seek(to:)
+                onSeek: model.seek(to:),
+                onMagnify: model.zoomWaveform(scale:anchorRatio:),
+                onHorizontalScroll: model.panWaveform(byViewRatio:)
             )
             .frame(height: model.waveformHeight)
             .frame(maxWidth: .infinity)
@@ -87,12 +102,20 @@ struct ContentView: View {
                     format: "%.0f",
                     suffix: "pt"
                 )
+                ParameterSlider(
+                    title: "Minimum Visible Span",
+                    value: $model.minimumVisibleDuration,
+                    range: 5...30,
+                    format: "%.0f",
+                    suffix: "s"
+                )
                 Toggle("Highlight Detected Audio", isOn: $model.showsDetectedRegions)
                     .toggleStyle(.switch)
             }
             .onChange(of: model.threshold) { _, _ in model.refreshAnalysis() }
             .onChange(of: model.minimumSoundDuration) { _, _ in model.refreshAnalysis() }
             .onChange(of: model.mergeSilenceDuration) { _, _ in model.refreshAnalysis() }
+            .onChange(of: model.minimumVisibleDuration) { _, _ in model.updateMinimumVisibleDuration() }
 
             if let errorMessage = model.errorMessage {
                 Text(errorMessage)

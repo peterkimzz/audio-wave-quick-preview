@@ -5,9 +5,12 @@ struct WaveformView: View {
     let waveform: [Float]
     let segments: [SoundSegment]
     let showsDetectedRegions: Bool
+    let viewport: WaveformViewport?
     let duration: Double
     let currentTime: Double
     let onSeek: (Double) -> Void
+    let onMagnify: (_ scale: Double, _ anchorRatio: Double) -> Void
+    let onHorizontalScroll: (_ deltaRatio: Double) -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -25,30 +28,47 @@ struct WaveformView: View {
                         description: Text("wav, mp3, m4a, flac files are supported in v1.")
                     )
                 }
+
+                if let indicatorDirection {
+                    VStack {
+                        HStack {
+                            if indicatorDirection == .left {
+                                Text("<--")
+                                    .font(.system(.headline, design: .monospaced))
+                                    .foregroundStyle(.red)
+                            }
+
+                            Spacer()
+
+                            if indicatorDirection == .right {
+                                Text("-->")
+                                    .font(.system(.headline, design: .monospaced))
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                }
+
+                WaveformInteractionView(
+                    onMagnify: onMagnify,
+                    onHorizontalScroll: onHorizontalScroll,
+                    onSeek: onSeek
+                )
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { gesture in
-                        guard geometry.size.width > 0 else { return }
-                        let ratio = gesture.location.x / geometry.size.width
-                        onSeek(ratio)
-                    }
-                    .onEnded { gesture in
-                        guard geometry.size.width > 0 else { return }
-                        let ratio = gesture.location.x / geometry.size.width
-                        onSeek(ratio)
-                    }
-            )
         }
     }
 
     private func drawSegments(in context: inout GraphicsContext, size: CGSize) {
-        guard showsDetectedRegions, duration > 0 else { return }
+        guard showsDetectedRegions, let viewport, duration > 0 else { return }
 
         for segment in segments {
-            let startX = size.width * (segment.startTime / duration)
-            let endX = size.width * (segment.endTime / duration)
+            let startRatio = (segment.startTime - viewport.visibleStartTime) / viewport.visibleDuration
+            let endRatio = (segment.endTime - viewport.visibleStartTime) / viewport.visibleDuration
+            let startX = size.width * startRatio
+            let endX = size.width * endRatio
             let rect = CGRect(x: startX, y: 0, width: max(endX - startX, 2), height: size.height)
 
             context.fill(
@@ -91,14 +111,20 @@ struct WaveformView: View {
     }
 
     private func drawPlayhead(in context: inout GraphicsContext, size: CGSize) {
-        guard duration > 0 else { return }
+        guard let viewport,
+              duration > 0,
+              let ratio = viewport.viewRatio(for: currentTime) else { return }
 
-        let x = size.width * (currentTime / duration)
+        let x = size.width * ratio
         let line = Path { path in
             path.move(to: CGPoint(x: x, y: 0))
             path.addLine(to: CGPoint(x: x, y: size.height))
         }
 
         context.stroke(line, with: .color(.red.opacity(0.85)), lineWidth: 2)
+    }
+
+    private var indicatorDirection: OffscreenIndicatorDirection? {
+        viewport?.offscreenIndicatorDirection(for: currentTime)
     }
 }
