@@ -59,21 +59,33 @@ struct ContentView: View {
                 .disabled(model.viewport == nil)
             }
 
-            WaveformView(
-                waveform: model.waveform,
-                viewport: model.viewport,
-                duration: model.duration,
-                currentTime: model.currentTime,
-                onSeek: model.seek(to:),
-                onMagnify: model.zoomWaveform(scale:anchorRatio:),
-                onHorizontalScroll: model.panWaveform(byViewRatio:)
-            )
-            .frame(height: 120)
-            .frame(maxWidth: .infinity)
-            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.15), lineWidth: isDropTargeted ? 2 : 1)
+            VStack(spacing: 7) {
+                WaveformView(
+                    waveform: model.waveform,
+                    viewport: model.viewport,
+                    duration: model.duration,
+                    currentTime: model.currentTime,
+                    onSeek: model.seek(to:),
+                    onMagnify: model.zoomWaveform(scale:anchorRatio:),
+                    onHorizontalScroll: model.panWaveform(byViewRatio:)
+                )
+                .frame(height: 120)
+                .frame(maxWidth: .infinity)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.15), lineWidth: isDropTargeted ? 2 : 1)
+                }
+
+                WaveformMinimapView(
+                    waveform: model.minimapWaveform,
+                    viewport: model.viewport,
+                    currentTime: model.currentTime,
+                    onJump: model.jumpViewport(toGlobalRatio:)
+                )
+                .frame(height: 18)
+                .frame(maxWidth: .infinity)
+                .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
 
             DisclosureGroup(

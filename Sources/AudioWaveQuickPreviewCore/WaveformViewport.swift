@@ -71,6 +71,12 @@ public struct WaveformViewport: Sendable, Equatable {
         )
     }
 
+    public func centeredOnGlobalRatio(_ ratio: Double) -> WaveformViewport {
+        let clampedRatio = min(max(ratio, 0), 1)
+        let targetTime = totalDuration * clampedRatio
+        return centeredOnTime(targetTime)
+    }
+
     public func panned(by deltaTime: Double) -> WaveformViewport {
         let candidateStart = visibleStartTime + deltaTime
         let maxStart = max(totalDuration - visibleDuration, 0)

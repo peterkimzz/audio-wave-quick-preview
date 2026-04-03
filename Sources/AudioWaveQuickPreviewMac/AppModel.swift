@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 final class AppModel: ObservableObject {
     @Published var fileName = "No audio selected"
     @Published var waveform: [Float] = []
+    @Published var minimapWaveform: [Float] = []
     @Published var duration: Double = 0
     @Published var currentTime: Double = 0
     @Published var isPlaying = false
@@ -123,9 +124,16 @@ final class AppModel: ObservableObject {
         updateVisiblePresentation()
     }
 
+    func jumpViewport(toGlobalRatio ratio: Double) {
+        guard let viewport else { return }
+        self.viewport = viewport.centeredOnGlobalRatio(ratio)
+        updateVisiblePresentation()
+    }
+
     func refreshAnalysis() {
         guard let document else {
             waveform = []
+            minimapWaveform = []
             statusMessage = "Open an audio file to inspect where sound is present."
             return
         }
@@ -142,6 +150,7 @@ final class AppModel: ObservableObject {
         )
 
         detectedSegments = result.segments
+        minimapWaveform = result.waveform
         statusMessage = makeStatusMessage(segments: result.segments, duration: document.duration)
         updateVisiblePresentation()
     }
@@ -172,6 +181,7 @@ final class AppModel: ObservableObject {
     private func updateVisiblePresentation() {
         guard let document else {
             waveform = []
+            minimapWaveform = []
             return
         }
 

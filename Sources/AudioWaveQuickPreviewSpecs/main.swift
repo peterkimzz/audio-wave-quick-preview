@@ -82,6 +82,26 @@ struct AudioWaveQuickPreviewSpecs {
             try expectNil(KeyboardShortcutResolver.action(for: "k", hasModifiers: false))
         }
 
+        run("minimap interactions recenter the viewport around any global ratio") {
+            let viewport = WaveformViewport(
+                totalDuration: 100,
+                visibleStartTime: 40,
+                visibleDuration: 10,
+                minimumVisibleDuration: 5
+            )
+
+            let moved = viewport.centeredOnGlobalRatio(0.8)
+            try expectEqual(moved.visibleStartTime, 75, accuracy: 0.0001)
+            try expectEqual(moved.visibleDuration, 10, accuracy: 0.0001)
+
+            let dragged = moved.centeredOnGlobalRatio(0.25)
+            try expectEqual(dragged.visibleStartTime, 20, accuracy: 0.0001)
+            try expectEqual(dragged.visibleDuration, 10, accuracy: 0.0001)
+
+            let clampedStart = viewport.centeredOnGlobalRatio(0.01)
+            try expectEqual(clampedStart.visibleStartTime, 0, accuracy: 0.0001)
+        }
+
         print("All specs passed")
     }
 }
