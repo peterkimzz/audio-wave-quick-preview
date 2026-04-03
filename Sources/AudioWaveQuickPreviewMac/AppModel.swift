@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppModel: ObservableObject {
+    private static let minimapWaveformBucketCount = 700
+    private static let mainWaveformBucketCount = 720
+
     @Published var fileName = "No audio selected"
     @Published var waveform: [Float] = []
     @Published var minimapWaveform: [Float] = []
@@ -22,8 +25,12 @@ final class AppModel: ObservableObject {
 
     private let playbackCoordinator = PlaybackCoordinator()
     private var document: AudioDocument?
+    private var waveformPyramid: WaveformPyramid?
+    private var waveformPyramidSourceURL: URL?
+    private var waveformCachePendingURL: URL?
     private var detectedSegments: [SoundSegment] = []
     private var playbackTimer: Timer?
+    private var waveformBuildTask: Task<Void, Never>?
 
     init() {
         playbackCoordinator.onStateChange = { [weak self] in
@@ -59,6 +66,10 @@ final class AppModel: ObservableObject {
             let document = try AudioFileLoader.loadAudioDocument(from: url)
             try playbackCoordinator.load(url: url)
             self.document = document
+            waveformPyramid = nil
+            waveformPyramidSourceURL = nil
+            waveformCachePendingURL = nil
+            waveformBuildTask?.cancel()
             fileName = document.fileName
             duration = document.duration
             currentTime = 0
@@ -134,6 +145,9 @@ final class AppModel: ObservableObject {
         guard let document else {
             waveform = []
             minimapWaveform = []
+            waveformPyramid = nil
+            waveformPyramidSourceURL = nil
+            waveformCachePendingURL = nil
             statusMessage = "Open an audio file to inspect where sound is present."
             return
         }
@@ -145,13 +159,24 @@ final class AppModel: ObservableObject {
                 threshold: Float(threshold),
                 minimumSoundDuration: minimumSoundDuration,
                 mergeSilenceDuration: mergeSilenceDuration,
-                waveformBucketCount: 700
+                waveformBucketCount: Self.minimapWaveformBucketCount
             )
         )
 
         detectedSegments = result.segments
-        minimapWaveform = result.waveform
         statusMessage = makeStatusMessage(segments: result.segments, duration: document.duration)
+
+        if waveformPyramidSourceURL == document.url, waveformPyramid != nil {
+            updateVisiblePresentation()
+            return
+        }
+
+        minimapWaveform = result.waveform
+
+        if waveformCachePendingURL != document.url {
+            buildWaveformCache(for: document)
+        }
+
         updateVisiblePresentation()
     }
 
@@ -191,7 +216,14 @@ final class AppModel: ObservableObject {
         )).updatingMinimumVisibleDuration(minimumVisibleDuration)
         self.viewport = viewport
 
-        waveform = makeVisibleWaveform(from: document, viewport: viewport)
+        if let waveformPyramid, waveformPyramidSourceURL == document.url {
+            waveform = waveformPyramid.samples(
+                for: viewport,
+                targetBucketCount: Self.mainWaveformBucketCount
+            )
+        } else {
+            waveform = makeVisibleWaveform(from: document, viewport: viewport)
+        }
     }
 
     private func makeVisibleWaveform(from document: AudioDocument, viewport: WaveformViewport) -> [Float] {
@@ -204,8 +236,39 @@ final class AppModel: ObservableObject {
             document.samples.count
         )
 
-        let visibleSamples = Array(document.samples[startIndex..<endIndex])
-        return WaveformDownsampler.downsample(samples: visibleSamples, bucketCount: 900)
+        return WaveformDownsampler.downsample(
+            samples: document.samples[startIndex..<endIndex],
+            bucketCount: Self.mainWaveformBucketCount
+        )
+    }
+
+    private func buildWaveformCache(for document: AudioDocument) {
+        let documentURL = document.url
+        let samples = document.samples
+        let duration = document.duration
+        let minimumVisibleDuration = minimumVisibleDuration
+        let minimapBucketCount = Self.minimapWaveformBucketCount
+
+        waveformBuildTask?.cancel()
+        waveformCachePendingURL = documentURL
+
+        waveformBuildTask = Task.detached(priority: .userInitiated) {
+            let pyramid = WaveformPyramid.build(from: samples)
+            let fullViewport = WaveformViewport.full(
+                duration: duration,
+                minimumVisibleDuration: minimumVisibleDuration
+            )
+            let minimap = pyramid.samples(for: fullViewport, targetBucketCount: minimapBucketCount)
+
+            await MainActor.run {
+                guard self.document?.url == documentURL else { return }
+                self.waveformPyramid = pyramid
+                self.waveformPyramidSourceURL = documentURL
+                self.waveformCachePendingURL = nil
+                self.minimapWaveform = minimap
+                self.updateVisiblePresentation()
+            }
+        }
     }
 }
 

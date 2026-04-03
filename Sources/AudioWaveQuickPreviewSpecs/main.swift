@@ -102,6 +102,60 @@ struct AudioWaveQuickPreviewSpecs {
             try expectEqual(clampedStart.visibleStartTime, 0, accuracy: 0.0001)
         }
 
+        run("waveform pyramid returns the full file at the requested density") {
+            let samples: [Float] = [0, 1, 0, 2, 0, 3, 0, 4]
+            let pyramid = WaveformPyramid.build(
+                from: samples,
+                maximumBucketCount: 8,
+                minimumBucketCount: 2
+            )
+            let viewport = WaveformViewport.full(duration: 8, minimumVisibleDuration: 1)
+
+            let displayed = pyramid.samples(for: viewport, targetBucketCount: 4)
+            try expectEqual(displayed, [1, 2, 3, 4], accuracy: 0.0001)
+        }
+
+        run("waveform pyramid returns only the visible time range") {
+            let samples: [Float] = [0, 1, 0, 2, 0, 3, 0, 4]
+            let pyramid = WaveformPyramid.build(
+                from: samples,
+                maximumBucketCount: 8,
+                minimumBucketCount: 2
+            )
+            let viewport = WaveformViewport(
+                totalDuration: 8,
+                visibleStartTime: 4,
+                visibleDuration: 4,
+                minimumVisibleDuration: 1
+            )
+
+            let displayed = pyramid.samples(for: viewport, targetBucketCount: 2)
+            try expectEqual(displayed, [3, 4], accuracy: 0.0001)
+        }
+
+        run("waveform pyramid preserves visible peaks across zoom levels") {
+            let samples: [Float] = [0, 0.1, 0, 0.9, 0, 0.2, 0, 0.8]
+            let pyramid = WaveformPyramid.build(
+                from: samples,
+                maximumBucketCount: 8,
+                minimumBucketCount: 2
+            )
+
+            let fullViewport = WaveformViewport.full(duration: 8, minimumVisibleDuration: 1)
+            let zoomedViewport = WaveformViewport(
+                totalDuration: 8,
+                visibleStartTime: 2,
+                visibleDuration: 2,
+                minimumVisibleDuration: 1
+            )
+
+            let fullDisplayed = pyramid.samples(for: fullViewport, targetBucketCount: 4)
+            try expectEqual(fullDisplayed, [0.1, 0.9, 0.2, 0.8], accuracy: 0.0001)
+
+            let zoomedDisplayed = pyramid.samples(for: zoomedViewport, targetBucketCount: 2)
+            try expectEqual(zoomedDisplayed, [0, 0.9], accuracy: 0.0001)
+        }
+
         print("All specs passed")
     }
 }
@@ -131,6 +185,18 @@ private func expectEqual<T: Equatable>(_ actual: T, _ expected: T) throws {
 private func expectNil<T>(_ value: T?) throws {
     if value != nil {
         throw SpecFailure(message: "Expected nil, got \(String(describing: value))")
+    }
+}
+
+private func expectEqual(_ actual: [Float], _ expected: [Float], accuracy: Float) throws {
+    if actual.count != expected.count {
+        throw SpecFailure(message: "Expected count \(expected.count), got \(actual.count)")
+    }
+
+    for (actualValue, expectedValue) in zip(actual, expected) {
+        if abs(actualValue - expectedValue) > accuracy {
+            throw SpecFailure(message: "Expected \(expected), got \(actual)")
+        }
     }
 }
 
