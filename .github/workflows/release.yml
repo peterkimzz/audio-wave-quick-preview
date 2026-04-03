@@ -1,0 +1,28 @@
+name: Release macOS App
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build app bundle and release archive
+        env:
+          VERSION_NAME: ${{ github.ref_name }}
+        run: ./scripts/package-app.sh
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/AudioWaveQuickPreview-${{ github.ref_name }}-macos.zip

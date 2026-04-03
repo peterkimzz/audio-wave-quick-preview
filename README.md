@@ -6,10 +6,12 @@ Lightweight macOS audio inspection app for quickly finding where sound is actual
 
 - Open `wav`, `mp3`, `m4a`, and `flac`
 - Play and pause the file
+- Toggle playback with the spacebar
 - Show a full-file waveform
-- Highlight automatically detected sound sections using RMS analysis
 - Click anywhere on the waveform to jump playback
-- Tune sensitivity, minimum sound duration, and silence merge duration
+- Drag across the waveform to scrub playback
+- Pinch to zoom and use horizontal trackpad scrolling to pan
+- Tune sensitivity, minimum sound duration, merge silence duration, and minimum visible span
 
 ## Development
 
@@ -26,6 +28,13 @@ Build an app bundle into `dist/`:
 cd /Users/peter/Projects/audio-wave-quick-preview-mac
 chmod +x scripts/package-app.sh scripts/install-app.sh
 ./scripts/package-app.sh
+```
+
+Build a versioned release archive for sharing:
+
+```bash
+cd /Users/peter/Projects/audio-wave-quick-preview-mac
+VERSION_NAME=v0.1.0 ./scripts/package-app.sh
 ```
 
 Install the app into `~/Applications` and register it with Launch Services:
@@ -49,7 +58,30 @@ Or open a file with it:
 open -a "Audio Wave Quick Preview" /path/to/file.wav
 ```
 
+## Team distribution via GitHub Releases
+
+Team members can install from the GitHub Releases page:
+
+1. Download the latest `AudioWaveQuickPreview-vX.Y.Z-macos.zip` asset from Releases.
+2. Unzip it to get `Audio Wave Quick Preview.app`.
+3. Move the app to `Applications` or `~/Applications`.
+4. Open it with right-click -> `Open` the first time if macOS shows an unsigned app warning.
+
+If macOS quarantine still blocks launch, run:
+
+```bash
+xattr -dr com.apple.quarantine "Audio Wave Quick Preview.app"
+```
+
+Releases are created automatically when a `v*` git tag is pushed. Example:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Notes
 
 - The app bundle declares support for `wav`, `mp3`, `m4a`, and `flac`, with a broader `public.audio` viewer role for Finder integration.
+- GitHub Releases currently ship unsigned internal-distribution builds. Apple code signing and notarization are not configured yet.
 - The core app target compiles successfully in this environment. The Swift test target is still blocked by missing local test-framework modules in the installed Command Line Tools setup.
