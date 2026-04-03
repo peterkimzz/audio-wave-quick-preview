@@ -8,15 +8,12 @@ import UniformTypeIdentifiers
 final class AppModel: ObservableObject {
     @Published var fileName = "No audio selected"
     @Published var waveform: [Float] = []
-    @Published var segments: [SoundSegment] = []
     @Published var duration: Double = 0
     @Published var currentTime: Double = 0
     @Published var isPlaying = false
     @Published var threshold: Double = 0.025
     @Published var minimumSoundDuration: Double = 0.12
     @Published var mergeSilenceDuration: Double = 0.08
-    @Published var waveformHeight: Double = 120
-    @Published var showsDetectedRegions = false
     @Published var minimumVisibleDuration: Double = 5
     @Published private(set) var viewport: WaveformViewport?
     @Published var statusMessage = "Open an audio file to inspect where sound is present."
@@ -129,7 +126,6 @@ final class AppModel: ObservableObject {
     func refreshAnalysis() {
         guard let document else {
             waveform = []
-            segments = []
             statusMessage = "Open an audio file to inspect where sound is present."
             return
         }
@@ -157,7 +153,7 @@ final class AppModel: ObservableObject {
         }
 
         let soundDuration = segments.reduce(0) { $0 + ($1.endTime - $1.startTime) }
-        return "\(segmentCount) sound section\(segmentCount == 1 ? "" : "s") detected across \(TimeFormatter.string(from: duration)). Highlighted regions are clickable."
+        return "\(segmentCount) sound section\(segmentCount == 1 ? "" : "s") detected across \(TimeFormatter.string(from: duration))."
             + " Total sound: \(TimeFormatter.string(from: soundDuration))."
     }
 
@@ -176,7 +172,6 @@ final class AppModel: ObservableObject {
     private func updateVisiblePresentation() {
         guard let document else {
             waveform = []
-            segments = []
             return
         }
 
@@ -187,7 +182,6 @@ final class AppModel: ObservableObject {
         self.viewport = viewport
 
         waveform = makeVisibleWaveform(from: document, viewport: viewport)
-        segments = makeVisibleSegments(from: detectedSegments, viewport: viewport)
     }
 
     private func makeVisibleWaveform(from document: AudioDocument, viewport: WaveformViewport) -> [Float] {
@@ -202,18 +196,6 @@ final class AppModel: ObservableObject {
 
         let visibleSamples = Array(document.samples[startIndex..<endIndex])
         return WaveformDownsampler.downsample(samples: visibleSamples, bucketCount: 900)
-    }
-
-    private func makeVisibleSegments(from segments: [SoundSegment], viewport: WaveformViewport) -> [SoundSegment] {
-        let visibleEndTime = viewport.visibleStartTime + viewport.visibleDuration
-
-        return segments.compactMap { segment in
-            let start = max(segment.startTime, viewport.visibleStartTime)
-            let end = min(segment.endTime, visibleEndTime)
-
-            guard end > start else { return nil }
-            return SoundSegment(startTime: start, endTime: end)
-        }
     }
 }
 

@@ -73,6 +73,15 @@ struct AudioWaveQuickPreviewSpecs {
             try expectEqual(pannedPastStart.visibleStartTime, 0, accuracy: 0.0001)
         }
 
+        run("space without modifiers maps to playback toggle") {
+            try expectEqual(
+                KeyboardShortcutResolver.action(for: " ", hasModifiers: false),
+                .togglePlayback
+            )
+            try expectNil(KeyboardShortcutResolver.action(for: " ", hasModifiers: true))
+            try expectNil(KeyboardShortcutResolver.action(for: "k", hasModifiers: false))
+        }
+
         print("All specs passed")
     }
 }

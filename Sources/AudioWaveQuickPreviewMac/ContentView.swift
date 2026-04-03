@@ -6,9 +6,10 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var isDropTargeted = false
+    @State private var showsAdvancedOptions = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(model.fileName)
@@ -33,6 +34,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.duration == 0)
+                .keyboardShortcut(.space, modifiers: [])
 
                 Text(TimeFormatter.string(from: model.currentTime))
                     .font(.system(.body, design: .monospaced))
@@ -59,8 +61,6 @@ struct ContentView: View {
 
             WaveformView(
                 waveform: model.waveform,
-                segments: model.segments,
-                showsDetectedRegions: model.showsDetectedRegions,
                 viewport: model.viewport,
                 duration: model.duration,
                 currentTime: model.currentTime,
@@ -68,7 +68,7 @@ struct ContentView: View {
                 onMagnify: model.zoomWaveform(scale:anchorRatio:),
                 onHorizontalScroll: model.panWaveform(byViewRatio:)
             )
-            .frame(height: model.waveformHeight)
+            .frame(height: 120)
             .frame(maxWidth: .infinity)
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay {
@@ -76,42 +76,50 @@ struct ContentView: View {
                     .stroke(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.15), lineWidth: isDropTargeted ? 2 : 1)
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                ParameterSlider(
-                    title: "Sensitivity",
-                    value: $model.threshold,
-                    range: 0.005...0.2,
-                    format: "%.3f"
-                )
-                ParameterSlider(
-                    title: "Minimum Sound",
-                    value: $model.minimumSoundDuration,
-                    range: 0.02...1.0,
-                    suffix: "s"
-                )
-                ParameterSlider(
-                    title: "Merge Silence",
-                    value: $model.mergeSilenceDuration,
-                    range: 0.02...0.8,
-                    suffix: "s"
-                )
-                ParameterSlider(
-                    title: "Waveform Height",
-                    value: $model.waveformHeight,
-                    range: 120...260,
-                    format: "%.0f",
-                    suffix: "pt"
-                )
-                ParameterSlider(
-                    title: "Minimum Visible Span",
-                    value: $model.minimumVisibleDuration,
-                    range: 5...30,
-                    format: "%.0f",
-                    suffix: "s"
-                )
-                Toggle("Highlight Detected Audio", isOn: $model.showsDetectedRegions)
-                    .toggleStyle(.switch)
-            }
+            DisclosureGroup(
+                isExpanded: $showsAdvancedOptions,
+                content: {
+                VStack(alignment: .leading, spacing: 12) {
+                    ParameterSlider(
+                        title: "Sensitivity",
+                        value: $model.threshold,
+                        range: 0.005...0.2,
+                        format: "%.3f"
+                    )
+                    ParameterSlider(
+                        title: "Minimum Sound",
+                        value: $model.minimumSoundDuration,
+                        range: 0.02...1.0,
+                        suffix: "s"
+                    )
+                    ParameterSlider(
+                        title: "Merge Silence",
+                        value: $model.mergeSilenceDuration,
+                        range: 0.02...0.8,
+                        suffix: "s"
+                    )
+                    ParameterSlider(
+                        title: "Minimum Visible Span",
+                        value: $model.minimumVisibleDuration,
+                        range: 5...30,
+                        format: "%.0f",
+                        suffix: "s"
+                    )
+                }
+                .padding(.top, 10)
+                },
+                label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: showsAdvancedOptions ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Advanced Options")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .foregroundStyle(.secondary.opacity(0.78))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+            )
             .onChange(of: model.threshold) { _, _ in model.refreshAnalysis() }
             .onChange(of: model.minimumSoundDuration) { _, _ in model.refreshAnalysis() }
             .onChange(of: model.mergeSilenceDuration) { _, _ in model.refreshAnalysis() }
@@ -123,8 +131,11 @@ struct ContentView: View {
                     .foregroundStyle(.red)
             }
         }
-        .padding(24)
-        .frame(minWidth: 900, minHeight: 560)
+        .padding(.horizontal, 24)
+        .padding(.top, 14)
+        .padding(.bottom, 14)
+        .frame(minWidth: 900, minHeight: 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             model.handleInitialLaunch()
         }

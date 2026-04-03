@@ -3,8 +3,6 @@ import SwiftUI
 
 struct WaveformView: View {
     let waveform: [Float]
-    let segments: [SoundSegment]
-    let showsDetectedRegions: Bool
     let viewport: WaveformViewport?
     let duration: Double
     let currentTime: Double
@@ -16,7 +14,6 @@ struct WaveformView: View {
         GeometryReader { geometry in
             ZStack {
                 Canvas { context, size in
-                    drawSegments(in: &context, size: size)
                     drawWaveform(in: &context, size: size)
                     drawPlayhead(in: &context, size: size)
                 }
@@ -61,30 +58,13 @@ struct WaveformView: View {
         }
     }
 
-    private func drawSegments(in context: inout GraphicsContext, size: CGSize) {
-        guard showsDetectedRegions, let viewport, duration > 0 else { return }
-
-        for segment in segments {
-            let startRatio = (segment.startTime - viewport.visibleStartTime) / viewport.visibleDuration
-            let endRatio = (segment.endTime - viewport.visibleStartTime) / viewport.visibleDuration
-            let startX = size.width * startRatio
-            let endX = size.width * endRatio
-            let rect = CGRect(x: startX, y: 0, width: max(endX - startX, 2), height: size.height)
-
-            context.fill(
-                Path(roundedRect: rect, cornerRadius: 6),
-                with: .color(.accentColor.opacity(0.18))
-            )
-        }
-    }
-
     private func drawWaveform(in context: inout GraphicsContext, size: CGSize) {
         guard !waveform.isEmpty else { return }
 
         var path = Path()
         let midY = size.height / 2
         let bucketWidth = size.width / CGFloat(max(waveform.count, 1))
-        let maxAmplitude = size.height * 0.36
+        let maxAmplitude = size.height * 0.46
 
         for (index, value) in waveform.enumerated() {
             let amplitude = min(CGFloat(value), 1) * maxAmplitude
