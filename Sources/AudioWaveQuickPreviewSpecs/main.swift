@@ -82,6 +82,19 @@ struct AudioWaveQuickPreviewSpecs {
             try expectNil(KeyboardShortcutResolver.action(for: "k", hasModifiers: false))
         }
 
+        run("arrow keys without modifiers map to 10-second seek actions") {
+            try expectEqual(
+                KeyboardShortcutResolver.action(forKeyCode: 123, hasModifiers: false),
+                .seekBackward
+            )
+            try expectEqual(
+                KeyboardShortcutResolver.action(forKeyCode: 124, hasModifiers: false),
+                .seekForward
+            )
+            try expectNil(KeyboardShortcutResolver.action(forKeyCode: 123, hasModifiers: true))
+            try expectNil(KeyboardShortcutResolver.action(forKeyCode: 999, hasModifiers: false))
+        }
+
         run("minimap interactions recenter the viewport around any global ratio") {
             let viewport = WaveformViewport(
                 totalDuration: 100,
@@ -154,6 +167,29 @@ struct AudioWaveQuickPreviewSpecs {
 
             let zoomedDisplayed = pyramid.samples(for: zoomedViewport, targetBucketCount: 2)
             try expectEqual(zoomedDisplayed, [0, 0.9], accuracy: 0.0001)
+        }
+
+        run("playback navigation moves in 10-second style jumps and clamps to file bounds") {
+            try expectEqual(
+                PlaybackNavigation.shiftedTime(currentTime: 15, duration: 100, delta: 10),
+                25,
+                accuracy: 0.0001
+            )
+            try expectEqual(
+                PlaybackNavigation.shiftedTime(currentTime: 15, duration: 100, delta: -10),
+                5,
+                accuracy: 0.0001
+            )
+            try expectEqual(
+                PlaybackNavigation.shiftedTime(currentTime: 4, duration: 100, delta: -10),
+                0,
+                accuracy: 0.0001
+            )
+            try expectEqual(
+                PlaybackNavigation.shiftedTime(currentTime: 97, duration: 100, delta: 10),
+                100,
+                accuracy: 0.0001
+            )
         }
 
         print("All specs passed")

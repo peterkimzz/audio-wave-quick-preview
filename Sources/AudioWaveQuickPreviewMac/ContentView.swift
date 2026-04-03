@@ -36,6 +36,18 @@ struct ContentView: View {
                 .disabled(model.duration == 0)
                 .keyboardShortcut(.space, modifiers: [])
 
+                Button("-10s") {
+                    model.seekBackwardByKeyboardInterval()
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.duration == 0)
+
+                Button("+10s") {
+                    model.seekForwardByKeyboardInterval()
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.duration == 0)
+
                 Text(TimeFormatter.string(from: model.currentTime))
                     .font(.system(.body, design: .monospaced))
 

@@ -1,3 +1,4 @@
+import AudioWaveQuickPreviewCore
 import SwiftUI
 
 @main
@@ -10,7 +11,19 @@ struct AudioWaveQuickPreviewMacApp: App {
             ContentView(model: model)
                 .onAppear {
                     appDelegate.onOpenFile = model.open(url:)
+                    appDelegate.onKeyboardAction = handleKeyboardAction(_:)
                 }
+        }
+    }
+
+    private func handleKeyboardAction(_ action: KeyboardShortcutAction) {
+        switch action {
+        case .togglePlayback:
+            model.togglePlayback()
+        case .seekBackward:
+            model.seekBackwardByKeyboardInterval()
+        case .seekForward:
+            model.seekForwardByKeyboardInterval()
         }
     }
 }

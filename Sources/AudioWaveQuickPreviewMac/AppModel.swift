@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 final class AppModel: ObservableObject {
     private static let minimapWaveformBucketCount = 700
     private static let mainWaveformBucketCount = 720
+    private static let keyboardSeekInterval = 10.0
 
     @Published var fileName = "No audio selected"
     @Published var waveform: [Float] = []
@@ -102,6 +103,25 @@ final class AppModel: ObservableObject {
 
         playbackCoordinator.seek(to: time)
         currentTime = time
+    }
+
+    func seekByKeyboardOffset(_ delta: Double) {
+        let time = PlaybackNavigation.shiftedTime(
+            currentTime: currentTime,
+            duration: duration,
+            delta: delta
+        )
+        playbackCoordinator.seek(to: time)
+        currentTime = time
+        isPlaying = playbackCoordinator.isPlaying
+    }
+
+    func seekBackwardByKeyboardInterval() {
+        seekByKeyboardOffset(-Self.keyboardSeekInterval)
+    }
+
+    func seekForwardByKeyboardInterval() {
+        seekByKeyboardOffset(Self.keyboardSeekInterval)
     }
 
     func zoomWaveform(scale: Double, anchorRatio: Double) {
