@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Pinned deliberately rather than `macos-latest`: that label moves to the next
+    # OS release without notice, which swaps the Xcode/Swift toolchain underneath
+    # and breaks CI with no code change (see 0ce46fb). Bump this on purpose.
+    runs-on: macos-26
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Run tests
+        run: swift test
+
+      # Viewport, pyramid, and keyboard coverage lives only in this executable,
+      # not in the `swift test` target.
+      - name: Run specs
+        run: swift run AudioWaveQuickPreviewSpecs
+
+      # Runs the same script release.yml does, so the release-configuration
+      # build and the bundle assembly are verified before a tag exists rather
+      # than after. VERSION_NAME defaults to `dev`, so no tag is needed.
+      - name: Build release app bundle
+        run: ./scripts/package-app.sh
