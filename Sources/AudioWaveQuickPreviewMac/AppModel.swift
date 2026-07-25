@@ -9,6 +9,8 @@ final class AppModel: ObservableObject {
     private static let minimapWaveformBucketCount = 700
     private static let mainWaveformBucketCount = 720
     private static let keyboardSeekInterval = 10.0
+    /// Zoom-in limit: the waveform never shows less than this much time.
+    private static let minimumVisibleDuration = 5.0
 
     @Published var fileName = "No audio selected"
     @Published var waveform: [Float] = []
@@ -29,12 +31,7 @@ final class AppModel: ObservableObject {
     }
     @Published private(set) var exportProgress: Double?
     @Published private(set) var lastSavedPath: String?
-    @Published var threshold: Double = 0.025
-    @Published var minimumSoundDuration: Double = 0.12
-    @Published var mergeSilenceDuration: Double = 0.08
-    @Published var minimumVisibleDuration: Double = 5
     @Published private(set) var viewport: WaveformViewport?
-    @Published var statusMessage = "Open an audio file to inspect where sound is present."
     @Published var errorMessage: String?
 
     private let playbackCoordinator = PlaybackCoordinator()
@@ -42,7 +39,6 @@ final class AppModel: ObservableObject {
     private var waveformPyramid: WaveformPyramid?
     private var waveformPyramidSourceURL: URL?
     private var waveformCachePendingURL: URL?
-    private var detectedSegments: [SoundSegment] = []
     private var playbackTimer: Timer?
     private var waveformBuildTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -97,14 +93,13 @@ final class AppModel: ObservableObject {
             applyPlaybackVolume()
             viewport = WaveformViewport.full(
                 duration: document.duration,
-                minimumVisibleDuration: minimumVisibleDuration
+                minimumVisibleDuration: Self.minimumVisibleDuration
             )
             errorMessage = nil
-            refreshAnalysis()
+            refreshWaveform()
             startPlaybackTimerIfNeeded()
         } catch {
             errorMessage = error.localizedDescription
-            statusMessage = "Unable to open the selected file."
         }
     }
 
@@ -144,6 +139,20 @@ final class AppModel: ObservableObject {
         return GainCalculations.isClipping(originalPeak: document.peak, gainDB: gainDB)
     }
 
+    /// True when the peak ceiling puts the loudness target out of reach, so
+    /// Normalize can't get there. Judged on what Normalize *would* set, not on
+    /// the current base — otherwise a file whose safe gain is exactly 0 dB (the
+    /// most peak-limited case there is) would look like it was never normalized.
+    var isPeakLimited: Bool {
+        guard let document, document.rms > 0 else { return false }
+        let reachableBaseDB = GainCalculations.gainForTargetLoudness(
+            currentRMS: document.rms,
+            originalPeak: document.peak,
+            targetDBFS: targetLoudnessDBFS
+        )
+        return GainCalculations.dBFS(document.rms) + reachableBaseDB < targetLoudnessDBFS - 0.05
+    }
+
     var maxSafeGainDB: Double {
         GainCalculations.maxSafeGainDB(originalPeak: document?.peak ?? 0)
     }
@@ -176,16 +185,6 @@ final class AppModel: ObservableObject {
         )
         lastSavedPath = nil
         applyPlaybackVolume()
-
-        // The "Loudness" readout below the slider shows the resulting value, so
-        // keep this line number-free to avoid a duplicate dBFS in the title area.
-        // Reachability is judged on the base alone (before the by-ear offset).
-        let reached = GainCalculations.dBFS(document.rms) + normalizeBaseDB
-        if reached < targetLoudnessDBFS - 0.05 {
-            statusMessage = "Peak limit reached — couldn't fully reach the target."
-        } else {
-            statusMessage = "Normalized to target."
-        }
     }
 
     func toggleBypass() {
@@ -238,12 +237,10 @@ final class AppModel: ObservableObject {
                 await MainActor.run {
                     model?.exportProgress = nil
                     model?.lastSavedPath = destination.path
-                    model?.statusMessage = "Saved \(destination.lastPathComponent)"
                 }
             } catch is CancellationError {
                 await MainActor.run {
                     model?.exportProgress = nil
-                    model?.statusMessage = "Export canceled."
                 }
             } catch {
                 await MainActor.run {
@@ -311,67 +308,38 @@ final class AppModel: ObservableObject {
         updateVisiblePresentation()
     }
 
-    func updateMinimumVisibleDuration() {
-        guard let viewport else { return }
-        self.viewport = viewport.updatingMinimumVisibleDuration(minimumVisibleDuration)
-        updateVisiblePresentation()
-    }
-
     func jumpViewport(toGlobalRatio ratio: Double) {
         guard let viewport else { return }
         self.viewport = viewport.centeredOnGlobalRatio(ratio)
         updateVisiblePresentation()
     }
 
-    func refreshAnalysis() {
+    func refreshWaveform() {
         guard let document else {
             waveform = []
             minimapWaveform = []
             waveformPyramid = nil
             waveformPyramidSourceURL = nil
             waveformCachePendingURL = nil
-            statusMessage = "Open an audio file to inspect where sound is present."
             return
         }
-
-        let result = AudioAnalysisEngine.analyze(
-            samples: document.samples,
-            sampleRate: document.sampleRate,
-            configuration: AnalysisConfiguration(
-                threshold: Float(threshold),
-                minimumSoundDuration: minimumSoundDuration,
-                mergeSilenceDuration: mergeSilenceDuration,
-                waveformBucketCount: Self.minimapWaveformBucketCount
-            )
-        )
-
-        detectedSegments = result.segments
-        statusMessage = makeStatusMessage(segments: result.segments, duration: document.duration)
 
         if waveformPyramidSourceURL == document.url, waveformPyramid != nil {
             updateVisiblePresentation()
             return
         }
 
-        minimapWaveform = result.waveform
+        // Cheap first pass so the minimap shows something while the pyramid builds.
+        minimapWaveform = WaveformDownsampler.downsample(
+            samples: document.samples,
+            bucketCount: Self.minimapWaveformBucketCount
+        )
 
         if waveformCachePendingURL != document.url {
             buildWaveformCache(for: document)
         }
 
         updateVisiblePresentation()
-    }
-
-    private func makeStatusMessage(segments: [SoundSegment], duration: Double) -> String {
-        let segmentCount = segments.count
-        if segmentCount == 0 {
-            return "No sound sections detected at the current sensitivity."
-        }
-
-        let soundDuration = segments.reduce(0) { $0 + ($1.endTime - $1.startTime) }
-        return
-            "\(segmentCount) sound section\(segmentCount == 1 ? "" : "s") detected across \(TimeFormatter.string(from: duration))."
-            + " Total sound: \(TimeFormatter.string(from: soundDuration))."
     }
 
     private func startPlaybackTimerIfNeeded() {
@@ -397,8 +365,8 @@ final class AppModel: ObservableObject {
             (self.viewport
             ?? .full(
                 duration: document.duration,
-                minimumVisibleDuration: minimumVisibleDuration
-            )).updatingMinimumVisibleDuration(minimumVisibleDuration)
+                minimumVisibleDuration: Self.minimumVisibleDuration
+            )).updatingMinimumVisibleDuration(Self.minimumVisibleDuration)
         self.viewport = viewport
 
         if let waveformPyramid, waveformPyramidSourceURL == document.url {
@@ -431,7 +399,7 @@ final class AppModel: ObservableObject {
         let documentURL = document.url
         let samples = document.samples
         let duration = document.duration
-        let minimumVisibleDuration = minimumVisibleDuration
+        let minimumVisibleDuration = Self.minimumVisibleDuration
         let minimapBucketCount = Self.minimapWaveformBucketCount
 
         waveformBuildTask?.cancel()

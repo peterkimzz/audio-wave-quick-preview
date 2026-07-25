@@ -1,6 +1,6 @@
 # Audio Wave Quick Preview Mac
 
-Lightweight macOS audio inspection app for quickly finding where sound is actually present inside long files.
+Lightweight macOS audio inspection app for quickly previewing a file's waveform and matching its loudness.
 
 ## Current v1 capabilities
 
@@ -11,13 +11,12 @@ Lightweight macOS audio inspection app for quickly finding where sound is actual
 - Click anywhere on the waveform to jump playback
 - Drag across the waveform to scrub playback
 - Pinch to zoom and use horizontal trackpad scrolling to pan
-- Tune sensitivity, minimum sound duration, merge silence duration, and minimum visible span
 
 ## Development
 
 This repository is currently structured as a Swift Package with:
 
-- `AudioWaveQuickPreviewCore`: pure analysis logic with tests
+- `AudioWaveQuickPreviewCore`: pure waveform, viewport, and gain logic with tests
 - `AudioWaveQuickPreviewMac`: SwiftUI macOS app shell
 
 Formatting is handled by `swift format` (bundled with Xcode, configured in
