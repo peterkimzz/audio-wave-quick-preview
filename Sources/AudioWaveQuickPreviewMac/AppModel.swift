@@ -97,6 +97,11 @@ final class AppModel: ObservableObject {
     func open(url: URL) {
         loadTask?.cancel()
         exportTask?.cancel()
+        // Before anything else, so a file that fails to decode cannot leave the
+        // previous one playing with the transport already reset out from under
+        // it. The space-bar monitor bypasses the disabled buttons, so a stale
+        // player would still be reachable.
+        playbackCoordinator.unload()
         stopPlaybackTimer()
 
         document = nil

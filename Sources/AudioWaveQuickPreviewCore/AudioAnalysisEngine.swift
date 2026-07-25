@@ -33,15 +33,7 @@ public enum AudioAnalysisEngine {
     ) -> [SoundSegment] {
         guard !envelope.values.isEmpty, envelope.sampleRate > 0 else { return [] }
 
-        let windows = envelope.values.enumerated().map { index, rms in
-            WindowEnergy(
-                startTime: envelope.startTime(ofWindow: index),
-                endTime: envelope.endTime(ofWindow: index),
-                rms: rms
-            )
-        }
-
-        let rawSegments = buildSegments(from: windows, threshold: configuration.threshold)
+        let rawSegments = buildSegments(from: envelope, threshold: configuration.threshold)
         let filteredSegments = rawSegments.filter {
             ($0.endTime - $0.startTime) >= configuration.minimumSoundDuration
         }
@@ -49,15 +41,19 @@ public enum AudioAnalysisEngine {
         return merge(segments: filteredSegments, gapTolerance: configuration.mergeSilenceDuration)
     }
 
-    private static func buildSegments(from windows: [WindowEnergy], threshold: Float) -> [SoundSegment] {
+    /// Walks the envelope in place. Materialising a per-window array here would
+    /// reintroduce the file-length-proportional allocation this module just shed
+    /// — ~1.2M entries for a 200 minute file, rebuilt on every sensitivity
+    /// slider tick.
+    private static func buildSegments(from envelope: RMSEnvelope, threshold: Float) -> [SoundSegment] {
         var segments: [SoundSegment] = []
         var currentStart: Double?
         var currentEnd: Double?
 
-        for window in windows {
-            if window.rms >= threshold {
-                currentStart = currentStart ?? window.startTime
-                currentEnd = window.endTime
+        for (index, rms) in envelope.values.enumerated() {
+            if rms >= threshold {
+                currentStart = currentStart ?? envelope.startTime(ofWindow: index)
+                currentEnd = envelope.endTime(ofWindow: index)
             } else if let start = currentStart, let end = currentEnd {
                 segments.append(SoundSegment(startTime: start, endTime: end))
                 currentStart = nil
@@ -88,12 +84,6 @@ public enum AudioAnalysisEngine {
         merged.append(current)
         return merged
     }
-}
-
-private struct WindowEnergy {
-    let startTime: Double
-    let endTime: Double
-    let rms: Float
 }
 
 public enum WaveformDownsampler {
