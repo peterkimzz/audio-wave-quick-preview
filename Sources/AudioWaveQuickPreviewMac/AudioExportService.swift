@@ -1,5 +1,5 @@
-import AudioWaveQuickPreviewCore
 import AVFoundation
+import AudioWaveQuickPreviewCore
 import Foundation
 
 enum AudioExportError: LocalizedError {
@@ -47,7 +47,7 @@ enum AudioExportService {
             throw AudioExportError.unreadableSource
         }
 
-        let format = input.processingFormat          // float32, deinterleaved
+        let format = input.processingFormat  // float32, deinterleaved
         let channelCount = Int(format.channelCount)
         let scale = Float(GainCalculations.linearScale(forDB: gainDB))
         let settings: [String: Any] = [

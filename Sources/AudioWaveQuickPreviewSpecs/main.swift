@@ -279,7 +279,9 @@ struct AudioWaveQuickPreviewSpecs {
         }
 
         run("normalize gain is zero for silence") {
-            try expectEqual(GainCalculations.gainForTargetLoudness(currentRMS: 0, originalPeak: 0, targetDBFS: -18), 0, accuracy: 0.001)
+            try expectEqual(
+                GainCalculations.gainForTargetLoudness(currentRMS: 0, originalPeak: 0, targetDBFS: -18), 0,
+                accuracy: 0.001)
         }
 
         run("loudness target clamps to a negative-only range") {
@@ -332,10 +334,9 @@ private func expectEqual(_ actual: [Float], _ expected: [Float], accuracy: Float
         throw SpecFailure(message: "Expected count \(expected.count), got \(actual.count)")
     }
 
-    for (actualValue, expectedValue) in zip(actual, expected) {
-        if abs(actualValue - expectedValue) > accuracy {
-            throw SpecFailure(message: "Expected \(expected), got \(actual)")
-        }
+    for (actualValue, expectedValue) in zip(actual, expected)
+    where abs(actualValue - expectedValue) > accuracy {
+        throw SpecFailure(message: "Expected \(expected), got \(actual)")
     }
 }
 

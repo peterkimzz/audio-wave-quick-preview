@@ -20,6 +20,15 @@ This repository is currently structured as a Swift Package with:
 - `AudioWaveQuickPreviewCore`: pure analysis logic with tests
 - `AudioWaveQuickPreviewMac`: SwiftUI macOS app shell
 
+Formatting is handled by `swift format` (bundled with Xcode, configured in
+`.swift-format`) and linting by [SwiftLint](https://github.com/realm/SwiftLint)
+(`brew install swiftlint`, configured in `.swiftlint.yml`). Both run in CI, and
+both auto-fix locally:
+
+```bash
+swift format --in-place --recursive Sources Tests && swiftlint lint --fix
+```
+
 ## Packaging and install
 
 Build an app bundle into `dist/`:

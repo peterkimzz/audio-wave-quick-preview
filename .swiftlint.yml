@@ -1,0 +1,20 @@
+included:
+  - Sources
+  - Tests
+
+disabled_rules:
+  # Formatting belongs to swift-format (see .swift-format), not here.
+  - line_length
+  - trailing_whitespace
+  # swift-format *adds* the trailing comma this rule bans — a direct conflict.
+  - trailing_comma
+  # Size thresholds are arbitrary for this codebase: SwiftUI view bodies and the
+  # spec runner are long by nature. Re-enable if a file gets genuinely unwieldy.
+  - file_length
+  - function_body_length
+  - type_body_length
+
+identifier_name:
+  excluded:
+    - x   # pixel coordinate
+    - db  # decibels

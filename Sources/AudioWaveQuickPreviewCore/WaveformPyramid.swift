@@ -60,9 +60,10 @@ public struct WaveformPyramid: Sendable, Equatable {
         }
 
         let visibleRatio = min(max(viewport.visibleDuration / viewport.totalDuration, 0), 1)
-        let selectedLevel = levels.first(where: {
-            Double($0.bucketCount) * visibleRatio <= Double(targetBucketCount * 4)
-        }) ?? levels.last ?? levels[0]
+        let selectedLevel =
+            levels.first(where: {
+                Double($0.bucketCount) * visibleRatio <= Double(targetBucketCount * 4)
+            }) ?? levels.last ?? levels[0]
 
         let visibleStartRatio = min(max(viewport.visibleStartTime / viewport.totalDuration, 0), 1)
         let visibleEndTime = min(viewport.visibleStartTime + viewport.visibleDuration, viewport.totalDuration)

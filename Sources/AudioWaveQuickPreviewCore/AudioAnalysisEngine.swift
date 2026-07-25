@@ -56,9 +56,10 @@ public enum AudioAnalysisEngine {
         let windows = stride(from: 0, to: samples.count, by: windowSize).map { startIndex -> WindowEnergy in
             let endIndex = min(startIndex + windowSize, samples.count)
             let window = samples[startIndex..<endIndex]
-            let energy = sqrt(window.reduce(0) { partialResult, sample in
-                partialResult + (sample * sample)
-            } / Float(window.count))
+            let energy = sqrt(
+                window.reduce(0) { partialResult, sample in
+                    partialResult + (sample * sample)
+                } / Float(window.count))
 
             return WindowEnergy(
                 startTime: Double(startIndex) / sampleRate,

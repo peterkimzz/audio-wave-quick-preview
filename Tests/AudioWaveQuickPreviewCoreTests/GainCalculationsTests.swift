@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import AudioWaveQuickPreviewCore
 
 struct GainCalculationsTests {
@@ -49,7 +50,9 @@ struct GainCalculationsTests {
 
     @Test
     func normalizeGainHitsTargetWithHeadroom() {
-        #expect(abs(GainCalculations.gainForTargetLoudness(currentRMS: 0.1, originalPeak: 0.2, targetDBFS: -14) - 6) < 0.001)
+        #expect(
+            abs(GainCalculations.gainForTargetLoudness(currentRMS: 0.1, originalPeak: 0.2, targetDBFS: -14) - 6) < 0.001
+        )
     }
 
     @Test
