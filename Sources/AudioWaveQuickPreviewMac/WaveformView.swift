@@ -1,62 +1,42 @@
-import AudioWaveQuickPreviewCore
 import SwiftUI
 
 struct WaveformView: View {
     let waveform: [Float]
     let gainScale: Float
-    let viewport: WaveformViewport?
-    let duration: Double
-    let currentTime: Double
+    /// Progress of the streaming analysis, or nil when nothing is loading.
+    let loadProgress: Double?
     let onSeek: (Double) -> Void
     let onMagnify: (_ scale: Double, _ anchorRatio: Double) -> Void
     let onHorizontalScroll: (_ deltaRatio: Double) -> Void
 
     var body: some View {
-        GeometryReader { _ in
-            ZStack {
-                Canvas { context, size in
-                    drawWaveform(in: &context, size: size)
-                    drawPlayhead(in: &context, size: size)
+        ZStack {
+            Canvas { context, size in
+                drawWaveform(in: &context, size: size)
+            }
+
+            if let loadProgress {
+                ProgressView(value: loadProgress) {
+                    Text("Analyzing audio…")
                 }
-
-                if waveform.isEmpty {
-                    ContentUnavailableView(
-                        "Drop or Open Audio",
-                        systemImage: "waveform",
-                        description: Text("wav, mp3, m4a, flac files are supported in v1.")
-                    )
-                }
-
-                if let indicatorDirection {
-                    VStack {
-                        HStack {
-                            if indicatorDirection == .left {
-                                Text("<--")
-                                    .font(.system(.headline, design: .monospaced))
-                                    .foregroundStyle(.red)
-                            }
-
-                            Spacer()
-
-                            if indicatorDirection == .right {
-                                Text("-->")
-                                    .font(.system(.headline, design: .monospaced))
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                        Spacer()
-                    }
-                    .padding(12)
-                }
-
-                WaveformInteractionView(
-                    onMagnify: onMagnify,
-                    onHorizontalScroll: onHorizontalScroll,
-                    onSeek: onSeek
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 240)
+                .padding(.horizontal, 24)
+            } else if waveform.isEmpty {
+                ContentUnavailableView(
+                    "Drop or Open Audio",
+                    systemImage: "waveform",
+                    description: Text("wav, mp3, m4a, flac files are supported in v1.")
                 )
             }
-            .contentShape(Rectangle())
+
+            WaveformInteractionView(
+                onMagnify: onMagnify,
+                onHorizontalScroll: onHorizontalScroll,
+                onSeek: onSeek
+            )
         }
+        .contentShape(Rectangle())
     }
 
     private func drawWaveform(in context: inout GraphicsContext, size: CGSize) {
@@ -89,24 +69,5 @@ struct WaveformView: View {
         }
 
         context.stroke(baseline, with: .color(.secondary.opacity(0.12)), lineWidth: 1)
-    }
-
-    private func drawPlayhead(in context: inout GraphicsContext, size: CGSize) {
-        guard let viewport,
-            duration > 0,
-            let ratio = viewport.viewRatio(for: currentTime)
-        else { return }
-
-        let x = size.width * ratio
-        let line = Path { path in
-            path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: size.height))
-        }
-
-        context.stroke(line, with: .color(.red.opacity(0.85)), lineWidth: 2)
-    }
-
-    private var indicatorDirection: OffscreenIndicatorDirection? {
-        viewport?.offscreenIndicatorDirection(for: currentTime)
     }
 }
