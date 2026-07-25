@@ -4,15 +4,13 @@ import Testing
 @testable import AudioWaveQuickPreviewCore
 
 /// The loader streams the file in chunks instead of holding every sample, so the
-/// streamed pyramid and envelope must match what a single full-array pass
-/// produces — otherwise the gain and loudness readouts drift silently.
+/// streamed pyramid must match what a single full-array pass produces —
+/// otherwise the waveform and the loudness readouts drift silently.
 ///
-/// Both references below are the original full-array expressions, kept here on
-/// purpose: `WaveformDownsampler.downsample` is untouched by the streaming work,
-/// and the envelope reference is the window loop sound-segment detection used to
-/// run before it was removed.
+/// The reference below is the original full-array expression, kept here on
+/// purpose: `WaveformDownsampler.downsample` is untouched by the streaming work.
 struct StreamingEquivalenceTests {
-    /// Chunk sizes deliberately unaligned with bucket and window boundaries.
+    /// Chunk sizes deliberately unaligned with bucket boundaries.
     private static let chunkSizes = [1, 7, 1_000, 65_536]
 
     @Test(arguments: [4_096, 131_072, 300_000])
@@ -38,39 +36,6 @@ struct StreamingEquivalenceTests {
         }
     }
 
-    @Test(arguments: [4_096, 131_072, 300_000])
-    func streamedEnvelopeMatchesFullArrayScan(sampleCount: Int) {
-        let sampleRate = 48_000.0
-        let samples = Self.makeSamples(count: sampleCount)
-        let reference = Self.referenceEnvelope(samples: samples, sampleRate: sampleRate)
-
-        for chunkSize in Self.chunkSizes {
-            var builder = RMSEnvelope.Builder(sampleRate: sampleRate)
-            for chunk in Self.chunks(of: samples, size: chunkSize) {
-                builder.append(chunk)
-            }
-            let envelope = builder.finish()
-
-            #expect(envelope.values == reference, "chunk size \(chunkSize)")
-            #expect(envelope.totalSampleCount == samples.count)
-        }
-    }
-
-    @Test
-    func envelopeWindowTimesMatchSampleIndexArithmetic() {
-        let sampleRate = 44_100.0
-        let samples = Self.makeSamples(count: 100_000)
-        let envelope = RMSEnvelope.build(samples: samples, sampleRate: sampleRate)
-        let windowSize = envelope.hopSize
-
-        for index in envelope.values.indices {
-            let startIndex = index * windowSize
-            let endIndex = min(startIndex + windowSize, samples.count)
-            #expect(envelope.startTime(ofWindow: index) == Double(startIndex) / sampleRate)
-            #expect(envelope.endTime(ofWindow: index) == Double(endIndex) / sampleRate)
-        }
-    }
-
     @Test
     func emptyInputProducesEmptyResults() {
         let empty = [Float]()[...]
@@ -78,10 +43,6 @@ struct StreamingEquivalenceTests {
         var pyramid = WaveformPyramid.Builder(totalSampleCount: 0)
         pyramid.append(empty)
         #expect(pyramid.finish().levels.isEmpty)
-
-        var envelope = RMSEnvelope.Builder(sampleRate: 48_000)
-        envelope.append(empty)
-        #expect(envelope.finish().values.isEmpty)
     }
 
     // MARK: - Fixtures
@@ -100,14 +61,6 @@ struct StreamingEquivalenceTests {
     private static func chunks(of samples: [Float], size: Int) -> [ArraySlice<Float>] {
         stride(from: 0, to: samples.count, by: size).map {
             samples[$0..<min($0 + size, samples.count)]
-        }
-    }
-
-    private static func referenceEnvelope(samples: [Float], sampleRate: Double) -> [Float] {
-        let windowSize = max(1, Int((RMSEnvelope.defaultWindowDuration * sampleRate).rounded(.up)))
-        return stride(from: 0, to: samples.count, by: windowSize).map { startIndex in
-            let window = samples[startIndex..<min(startIndex + windowSize, samples.count)]
-            return (window.reduce(0) { $0 + ($1 * $1) } / Float(window.count)).squareRoot()
         }
     }
 }
