@@ -49,10 +49,25 @@ final class AppModel: ObservableObject {
 
     init() {
         playbackCoordinator.onStateChange = { [weak self] in
-            guard let self else { return }
-            self.currentTime = self.playbackCoordinator.currentTime
-            self.isPlaying = self.playbackCoordinator.isPlaying
+            self?.syncPlaybackState()
         }
+    }
+
+    // MARK: - Playhead
+
+    /// Playhead position within the visible span, or nil when it is offscreen.
+    var playheadViewRatio: Double? {
+        viewport?.viewRatio(for: currentTime)
+    }
+
+    var playheadOffscreenDirection: OffscreenIndicatorDirection? {
+        viewport?.offscreenIndicatorDirection(for: currentTime)
+    }
+
+    /// Playhead position across the whole file, for the minimap.
+    var playheadGlobalRatio: Double? {
+        guard let viewport, viewport.totalDuration > 0 else { return nil }
+        return min(max(currentTime / viewport.totalDuration, 0), 1)
     }
 
     func handleInitialLaunch(arguments: [String] = CommandLine.arguments) {
@@ -101,7 +116,6 @@ final class AppModel: ObservableObject {
             )
             errorMessage = nil
             refreshAnalysis()
-            startPlaybackTimerIfNeeded()
         } catch {
             errorMessage = error.localizedDescription
             statusMessage = "Unable to open the selected file."
@@ -110,7 +124,6 @@ final class AppModel: ObservableObject {
 
     func togglePlayback() {
         playbackCoordinator.playPause()
-        isPlaying = playbackCoordinator.isPlaying
     }
 
     // MARK: - Gain
@@ -275,7 +288,6 @@ final class AppModel: ObservableObject {
         )
         playbackCoordinator.seek(to: time)
         currentTime = time
-        isPlaying = playbackCoordinator.isPlaying
     }
 
     func seekBackwardByKeyboardInterval() {
@@ -374,16 +386,37 @@ final class AppModel: ObservableObject {
             + " Total sound: \(TimeFormatter.string(from: soundDuration))."
     }
 
-    private func startPlaybackTimerIfNeeded() {
-        if playbackTimer == nil {
-            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.currentTime = self.playbackCoordinator.currentTime
-                    self.isPlaying = self.playbackCoordinator.isPlaying
-                }
+    /// Mirrors the player onto the published state. Assigning unconditionally
+    /// would fire `objectWillChange` 40×/second even while paused, which redraws
+    /// the entire view tree for nothing — hence the equality guards.
+    private func syncPlaybackState() {
+        let time = playbackCoordinator.currentTime
+        if currentTime != time { currentTime = time }
+
+        let playing = playbackCoordinator.isPlaying
+        if isPlaying != playing { isPlaying = playing }
+
+        if playing {
+            startPlaybackTimer()
+        } else {
+            stopPlaybackTimer()
+        }
+    }
+
+    private func startPlaybackTimer() {
+        guard playbackTimer == nil else { return }
+        // Scheduled on the main run loop, so the tick is already main-actor
+        // isolated — no need to hop through a Task per tick.
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.syncPlaybackState()
             }
         }
+    }
+
+    private func stopPlaybackTimer() {
+        playbackTimer?.invalidate()
+        playbackTimer = nil
     }
 
     private func updateVisiblePresentation() {
