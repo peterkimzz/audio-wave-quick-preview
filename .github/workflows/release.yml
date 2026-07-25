@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest
+    # Must match the runner in ci.yml, so the binary users download is built on
+    # the toolchain CI actually tested against.
+    runs-on: macos-26
 
     steps:
       - name: Check out repository
