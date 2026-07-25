@@ -93,4 +93,4 @@ git push origin v0.1.0
 
 - The app bundle declares support for `wav`, `mp3`, `m4a`, and `flac`, with a broader `public.audio` viewer role for Finder integration.
 - GitHub Releases currently ship unsigned internal-distribution builds. Apple code signing and notarization are not configured yet.
-- The core app target compiles successfully in this environment. The Swift test target is still blocked by missing local test-framework modules in the installed Command Line Tools setup.
+- Tests run in two places: `swift test` (Swift Testing, `Tests/AudioWaveQuickPreviewCoreTests`) and `swift run AudioWaveQuickPreviewSpecs` (a plain executable covering viewport, pyramid, and keyboard behaviour that the test target does not). CI runs both on every pull request.

@@ -10,11 +10,13 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest
+    # Must match the runner in ci.yml, so the binary users download is built on
+    # the toolchain CI actually tested against.
+    runs-on: macos-26
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build app bundle and release archive
         env:
@@ -22,7 +24,7 @@ jobs:
         run: ./scripts/package-app.sh
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: dist/AudioWaveQuickPreview-${{ github.ref_name }}-macos.zip
