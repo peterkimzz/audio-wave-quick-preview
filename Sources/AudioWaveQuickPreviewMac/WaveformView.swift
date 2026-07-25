@@ -93,8 +93,9 @@ struct WaveformView: View {
 
     private func drawPlayhead(in context: inout GraphicsContext, size: CGSize) {
         guard let viewport,
-              duration > 0,
-              let ratio = viewport.viewRatio(for: currentTime) else { return }
+            duration > 0,
+            let ratio = viewport.viewRatio(for: currentTime)
+        else { return }
 
         let x = size.width * ratio
         let line = Path { path in

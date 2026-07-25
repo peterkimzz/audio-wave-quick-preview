@@ -1,5 +1,5 @@
-import AudioWaveQuickPreviewCore
 import AppKit
+import AudioWaveQuickPreviewCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var onOpenFile: ((URL) -> Void)?
@@ -28,10 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .subtracting([.capsLock, .numericPad, .function])
                 .isEmpty
 
-            guard let action = KeyboardShortcutResolver.action(
-                forKeyCode: event.keyCode,
-                hasModifiers: hasModifiers
-            ) else {
+            guard
+                let action = KeyboardShortcutResolver.action(
+                    forKeyCode: event.keyCode,
+                    hasModifiers: hasModifiers
+                )
+            else {
                 return event
             }
 

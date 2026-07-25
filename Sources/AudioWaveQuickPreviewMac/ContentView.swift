@@ -37,8 +37,7 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 Button {
                     model.togglePlayback()
-                }
-                label: {
+                } label: {
                     ZStack {
                         Image(systemName: "play.fill")
                             .opacity(playbackControl.systemImageName == "play.fill" ? 1 : 0)
@@ -107,7 +106,9 @@ struct ContentView: View {
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.15), lineWidth: isDropTargeted ? 2 : 1)
+                        .stroke(
+                            isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.15),
+                            lineWidth: isDropTargeted ? 2 : 1)
                 }
 
                 WaveformMinimapView(
@@ -125,38 +126,38 @@ struct ContentView: View {
             DisclosureGroup(
                 isExpanded: $showsAdvancedOptions,
                 content: {
-                VStack(alignment: .leading, spacing: 12) {
-                    FineTuneControls(model: model)
+                    VStack(alignment: .leading, spacing: 12) {
+                        FineTuneControls(model: model)
 
-                    Divider()
+                        Divider()
 
-                    ParameterSlider(
-                        title: "Sensitivity",
-                        value: $model.threshold,
-                        range: 0.005...0.2,
-                        format: "%.3f"
-                    )
-                    ParameterSlider(
-                        title: "Minimum Sound",
-                        value: $model.minimumSoundDuration,
-                        range: 0.02...1.0,
-                        suffix: "s"
-                    )
-                    ParameterSlider(
-                        title: "Merge Silence",
-                        value: $model.mergeSilenceDuration,
-                        range: 0.02...0.8,
-                        suffix: "s"
-                    )
-                    ParameterSlider(
-                        title: "Minimum Visible Span",
-                        value: $model.minimumVisibleDuration,
-                        range: 5...30,
-                        format: "%.0f",
-                        suffix: "s"
-                    )
-                }
-                .padding(.top, 10)
+                        ParameterSlider(
+                            title: "Sensitivity",
+                            value: $model.threshold,
+                            range: 0.005...0.2,
+                            format: "%.3f"
+                        )
+                        ParameterSlider(
+                            title: "Minimum Sound",
+                            value: $model.minimumSoundDuration,
+                            range: 0.02...1.0,
+                            suffix: "s"
+                        )
+                        ParameterSlider(
+                            title: "Merge Silence",
+                            value: $model.mergeSilenceDuration,
+                            range: 0.02...0.8,
+                            suffix: "s"
+                        )
+                        ParameterSlider(
+                            title: "Minimum Visible Span",
+                            value: $model.minimumVisibleDuration,
+                            range: 5...30,
+                            format: "%.0f",
+                            suffix: "s"
+                        )
+                    }
+                    .padding(.top, 10)
                 },
                 label: {
                     HStack(spacing: 8) {
@@ -199,7 +200,8 @@ struct ContentView: View {
 
         provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
             guard let data = item as? Data,
-                  let url = URL(dataRepresentation: data, relativeTo: nil) else {
+                let url = URL(dataRepresentation: data, relativeTo: nil)
+            else {
                 return
             }
 
@@ -315,10 +317,13 @@ private struct FineTuneControls: View {
                 Text("Fine-tune")
                     .font(.headline)
 
-                Slider(value: offsetBinding, in: GainCalculations.minOffsetDB...GainCalculations.maxOffsetDB, step: GainCalculations.stepDB)
-                    .frame(minWidth: 160)
-                    .disabled(!model.hasDocument)
-                    .help("Nudge the loudness up or down by ear, on top of Normalize.")
+                Slider(
+                    value: offsetBinding, in: GainCalculations.minOffsetDB...GainCalculations.maxOffsetDB,
+                    step: GainCalculations.stepDB
+                )
+                .frame(minWidth: 160)
+                .disabled(!model.hasDocument)
+                .help("Nudge the loudness up or down by ear, on top of Normalize.")
 
                 Text("\(signed(model.offsetDB)) dB")
                     .font(.system(.body, design: .monospaced))

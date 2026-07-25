@@ -1,11 +1,13 @@
 import Foundation
 import Testing
+
 @testable import AudioWaveQuickPreviewCore
 
 struct AudioAnalysisEngineTests {
     @Test
     func detectsSoundSegmentsWithMinimumDurationAndGapMerging() {
-        let samples = Array(repeating: Float(0), count: 10)
+        let samples =
+            Array(repeating: Float(0), count: 10)
             + Array(repeating: Float(0.8), count: 20)
             + Array(repeating: Float(0), count: 5)
             + Array(repeating: Float(0.7), count: 15)
@@ -32,7 +34,8 @@ struct AudioAnalysisEngineTests {
 
     @Test
     func filtersOutBurstsShorterThanMinimumDuration() {
-        let samples = Array(repeating: Float(0), count: 10)
+        let samples =
+            Array(repeating: Float(0), count: 10)
             + Array(repeating: Float(0.9), count: 4)
             + Array(repeating: Float(0), count: 20)
 

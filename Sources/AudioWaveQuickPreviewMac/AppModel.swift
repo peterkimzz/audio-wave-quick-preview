@@ -1,5 +1,5 @@
-import AudioWaveQuickPreviewCore
 import AppKit
+import AudioWaveQuickPreviewCore
 import Combine
 import Foundation
 import UniformTypeIdentifiers
@@ -369,7 +369,8 @@ final class AppModel: ObservableObject {
         }
 
         let soundDuration = segments.reduce(0) { $0 + ($1.endTime - $1.startTime) }
-        return "\(segmentCount) sound section\(segmentCount == 1 ? "" : "s") detected across \(TimeFormatter.string(from: duration))."
+        return
+            "\(segmentCount) sound section\(segmentCount == 1 ? "" : "s") detected across \(TimeFormatter.string(from: duration))."
             + " Total sound: \(TimeFormatter.string(from: soundDuration))."
     }
 
@@ -392,10 +393,12 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let viewport = (self.viewport ?? .full(
-            duration: document.duration,
-            minimumVisibleDuration: minimumVisibleDuration
-        )).updatingMinimumVisibleDuration(minimumVisibleDuration)
+        let viewport =
+            (self.viewport
+            ?? .full(
+                duration: document.duration,
+                minimumVisibleDuration: minimumVisibleDuration
+            )).updatingMinimumVisibleDuration(minimumVisibleDuration)
         self.viewport = viewport
 
         if let waveformPyramid, waveformPyramidSourceURL == document.url {
