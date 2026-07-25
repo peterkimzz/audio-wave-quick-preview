@@ -32,6 +32,11 @@ final class PlaybackCoordinator: NSObject {
         onStateChange?()
     }
 
+    /// Adjusts preview loudness without disturbing position or play state.
+    func setVolume(_ volume: Float) {
+        player?.volume = volume
+    }
+
     func seek(to time: Double) {
         guard let player else { return }
         player.currentTime = min(max(time, 0), player.duration)

@@ -211,6 +211,90 @@ struct AudioWaveQuickPreviewSpecs {
             )
         }
 
+        run("gain dB and linear scale round-trip") {
+            try expectEqual(GainCalculations.linearScale(forDB: 0), 1, accuracy: 0.0001)
+            try expectEqual(GainCalculations.linearScale(forDB: 6), 1.99526, accuracy: 0.0001)
+            try expectEqual(GainCalculations.linearScale(forDB: -6), 0.501187, accuracy: 0.0001)
+        }
+
+        run("gain snaps to the 0.5 dB grid and clamps to range") {
+            try expectEqual(GainCalculations.snap(3.2), 3, accuracy: 0.0001)
+            try expectEqual(GainCalculations.snap(3.3), 3.5, accuracy: 0.0001)
+            try expectEqual(GainCalculations.snap(-100), -24, accuracy: 0.0001)
+            try expectEqual(GainCalculations.snap(100), 12, accuracy: 0.0001)
+        }
+
+        run("clipping is judged against the -0.1 dBFS ceiling (~0.9886)") {
+            // Just below the ceiling is safe; just above clips.
+            try expectEqual(GainCalculations.isClipping(originalPeak: 0.98, gainDB: 0), false)
+            try expectEqual(GainCalculations.isClipping(originalPeak: 0.99, gainDB: 0), true)
+            try expectEqual(GainCalculations.isClipping(originalPeak: 1.0, gainDB: 0), true)
+            try expectEqual(GainCalculations.isClipping(originalPeak: 0.5, gainDB: 6), true)
+            try expectEqual(GainCalculations.isClipping(originalPeak: 0.5, gainDB: 0), false)
+        }
+
+        run("max safe gain floors to the grid and treats silence as unrestricted") {
+            try expectEqual(GainCalculations.maxSafeGainDB(originalPeak: 0), 12, accuracy: 0.0001)
+            // 0.5 * scale(6.0) ≈ 0.997 which is above the ceiling, so 6.0 is unsafe → 5.5.
+            try expectEqual(GainCalculations.maxSafeGainDB(originalPeak: 0.5), 5.5, accuracy: 0.0001)
+            // A near-full-scale file needs attenuation.
+            try expectEqual(GainCalculations.maxSafeGainDB(originalPeak: 1.0) <= 0, true)
+        }
+
+        run("output file names carry the signed gain and a wav extension") {
+            try expectEqual(
+                GainCalculations.outputFileName(originalName: "song.mp3", gainDB: 3),
+                "song_gain+3.0dB.wav"
+            )
+            try expectEqual(
+                GainCalculations.outputFileName(originalName: "song.flac", gainDB: -6),
+                "song_gain-6.0dB.wav"
+            )
+            try expectEqual(
+                GainCalculations.outputFileName(originalName: "clip.wav", gainDB: 0),
+                "clip_gain+0.0dB.wav"
+            )
+        }
+
+        run("dBFS converts levels and treats silence as -infinity") {
+            try expectEqual(GainCalculations.dBFS(0.5), -6.0206, accuracy: 0.001)
+            try expectEqual(GainCalculations.dBFS(1.0), 0, accuracy: 0.001)
+            if GainCalculations.dBFS(0) != -.infinity {
+                throw SpecFailure(message: "silence should be -infinity")
+            }
+        }
+
+        run("normalize gain hits the target when the peak has headroom") {
+            // RMS 0.1 (-20 dBFS), peak 0.2 → target -14 needs +6 dB; peak 0.2*2=0.4 is safe.
+            try expectEqual(
+                GainCalculations.gainForTargetLoudness(currentRMS: 0.1, originalPeak: 0.2, targetDBFS: -14),
+                6, accuracy: 0.001
+            )
+        }
+
+        run("normalize gain is capped by the clipping ceiling") {
+            // RMS 0.1 (-20 dBFS) target 0 dBFS wants +20 dB, but peak 0.5 only allows ~+5.5 dB.
+            let capped = GainCalculations.gainForTargetLoudness(currentRMS: 0.1, originalPeak: 0.5, targetDBFS: 0)
+            try expectEqual(capped, GainCalculations.maxSafeGainDB(originalPeak: 0.5), accuracy: 0.001)
+        }
+
+        run("normalize gain is zero for silence") {
+            try expectEqual(GainCalculations.gainForTargetLoudness(currentRMS: 0, originalPeak: 0, targetDBFS: -18), 0, accuracy: 0.001)
+        }
+
+        run("loudness target clamps to a negative-only range") {
+            try expectEqual(GainCalculations.clampTarget(-18), -18, accuracy: 0.001)
+            try expectEqual(GainCalculations.clampTarget(5), 0, accuracy: 0.001)
+            try expectEqual(GainCalculations.clampTarget(-999), -60, accuracy: 0.001)
+        }
+
+        run("fine-tune offset snaps to the grid and clamps to its range") {
+            try expectEqual(GainCalculations.snapOffset(2.2), 2, accuracy: 0.001)
+            try expectEqual(GainCalculations.snapOffset(2.3), 2.5, accuracy: 0.001)
+            try expectEqual(GainCalculations.snapOffset(50), 12, accuracy: 0.001)
+            try expectEqual(GainCalculations.snapOffset(-50), -12, accuracy: 0.001)
+        }
+
         print("All specs passed")
     }
 }

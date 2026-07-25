@@ -16,6 +16,19 @@ final class AppModel: ObservableObject {
     @Published var duration: Double = 0
     @Published var currentTime: Double = 0
     @Published var isPlaying = false
+    /// Base gain set by Normalize to reach the loudness target (peak-limited).
+    @Published private(set) var normalizeBaseDB: Double = 0
+    /// Manual by-ear fine-tune added on top of the base.
+    @Published private(set) var offsetDB: Double = 0
+    @Published private(set) var isBypassed = false
+    @Published var targetLoudnessDBFS = GainCalculations.defaultTargetLoudnessDBFS {
+        didSet {
+            let clamped = GainCalculations.clampTarget(targetLoudnessDBFS)
+            if clamped != targetLoudnessDBFS { targetLoudnessDBFS = clamped }
+        }
+    }
+    @Published private(set) var exportProgress: Double?
+    @Published private(set) var lastSavedPath: String?
     @Published var threshold: Double = 0.025
     @Published var minimumSoundDuration: Double = 0.12
     @Published var mergeSilenceDuration: Double = 0.08
@@ -32,6 +45,7 @@ final class AppModel: ObservableObject {
     private var detectedSegments: [SoundSegment] = []
     private var playbackTimer: Timer?
     private var waveformBuildTask: Task<Void, Never>?
+    private var exportTask: Task<Void, Never>?
 
     init() {
         playbackCoordinator.onStateChange = { [weak self] in
@@ -74,6 +88,13 @@ final class AppModel: ObservableObject {
             fileName = document.fileName
             duration = document.duration
             currentTime = 0
+            normalizeBaseDB = 0
+            offsetDB = 0
+            isBypassed = false
+            exportTask?.cancel()
+            exportProgress = nil
+            lastSavedPath = nil
+            applyPlaybackVolume()
             viewport = WaveformViewport.full(
                 duration: document.duration,
                 minimumVisibleDuration: minimumVisibleDuration
@@ -90,6 +111,147 @@ final class AppModel: ObservableObject {
     func togglePlayback() {
         playbackCoordinator.playPause()
         isPlaying = playbackCoordinator.isPlaying
+    }
+
+    // MARK: - Gain
+
+    var hasDocument: Bool { document != nil }
+
+    /// Effective gain applied everywhere = Normalize base + fine-tune offset,
+    /// snapped and clamped to the valid dB range.
+    var gainDB: Double { GainCalculations.snap(normalizeBaseDB + offsetDB) }
+
+    /// Display scale for the waveform (reflects the save gain, ignores bypass).
+    var waveformGainScale: Float {
+        Float(GainCalculations.linearScale(forDB: gainDB))
+    }
+
+    var estimatedPeakDBFS: Double {
+        GainCalculations.estimatedPeakDBFS(originalPeak: document?.peak ?? 0, gainDB: gainDB)
+    }
+
+    /// Estimated perceived loudness (RMS) after the current gain, in dBFS.
+    var estimatedLoudnessDBFS: Double {
+        guard let document else { return -.infinity }
+        return GainCalculations.dBFS(document.rms) + gainDB
+    }
+
+    var isClipping: Bool {
+        // Attenuation or unity can't introduce clipping, so an already-hot source
+        // (peak ≥ ceiling) is still saveable at 0 dB or below — only a positive
+        // gain that pushes the peak past the ceiling blocks Save.
+        guard let document, gainDB > 0 else { return false }
+        return GainCalculations.isClipping(originalPeak: document.peak, gainDB: gainDB)
+    }
+
+    var maxSafeGainDB: Double {
+        GainCalculations.maxSafeGainDB(originalPeak: document?.peak ?? 0)
+    }
+
+    var canSave: Bool { hasDocument && !isClipping && exportProgress == nil }
+
+    /// Manual by-ear fine-tune, layered on top of the Normalize base.
+    func setOffset(_ db: Double) {
+        offsetDB = GainCalculations.snapOffset(db)
+        lastSavedPath = nil
+        applyPlaybackVolume()
+    }
+
+    /// "0 dB Reset" — back to the original level (clears base and offset).
+    func resetGain() {
+        normalizeBaseDB = 0
+        offsetDB = 0
+        lastSavedPath = nil
+        applyPlaybackVolume()
+    }
+
+    /// Sets the base gain so the file's RMS lands on `targetLoudnessDBFS`, capped
+    /// so the peak never clips. The fine-tune offset is left untouched.
+    func normalizeToTarget() {
+        guard let document else { return }
+        normalizeBaseDB = GainCalculations.gainForTargetLoudness(
+            currentRMS: document.rms,
+            originalPeak: document.peak,
+            targetDBFS: targetLoudnessDBFS
+        )
+        lastSavedPath = nil
+        applyPlaybackVolume()
+
+        // The "Loudness" readout below the slider shows the resulting value, so
+        // keep this line number-free to avoid a duplicate dBFS in the title area.
+        // Reachability is judged on the base alone (before the by-ear offset).
+        let reached = GainCalculations.dBFS(document.rms) + normalizeBaseDB
+        if reached < targetLoudnessDBFS - 0.05 {
+            statusMessage = "Peak limit reached — couldn't fully reach the target."
+        } else {
+            statusMessage = "Normalized to target."
+        }
+    }
+
+    func toggleBypass() {
+        isBypassed.toggle()
+        applyPlaybackVolume()
+    }
+
+    private func applyPlaybackVolume() {
+        // AVAudioPlayer volume can't exceed unity, so a boost would make the
+        // gained and bypassed sides both play at 1.0 (Bypass becomes inaudible).
+        // Keep the relative difference audible by attenuating whichever side
+        // would exceed 1.0 instead.
+        let scale = GainCalculations.linearScale(forDB: gainDB)
+        playbackCoordinator.setVolume(Float(isBypassed ? min(1 / scale, 1) : min(scale, 1)))
+    }
+
+    func saveAs() {
+        guard let document, canSave else { return }
+
+        let panel = NSSavePanel()
+        panel.title = "Save gain-adjusted WAV"
+        panel.nameFieldStringValue = GainCalculations.outputFileName(
+            originalName: document.fileName,
+            gainDB: gainDB
+        )
+        panel.allowedContentTypes = [.wav]
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        startExport(source: document.url, destination: destination, gainDB: gainDB)
+    }
+
+    func cancelExport() {
+        exportTask?.cancel()
+    }
+
+    private func startExport(source: URL, destination: URL, gainDB: Double) {
+        errorMessage = nil
+        exportProgress = 0
+        exportTask?.cancel()
+        exportTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let model = self
+            do {
+                try AudioExportService.export(
+                    source: source,
+                    destination: destination,
+                    gainDB: gainDB
+                ) { progress in
+                    Task { @MainActor in model?.exportProgress = progress }
+                }
+                await MainActor.run {
+                    model?.exportProgress = nil
+                    model?.lastSavedPath = destination.path
+                    model?.statusMessage = "Saved \(destination.lastPathComponent)"
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    model?.exportProgress = nil
+                    model?.statusMessage = "Export canceled."
+                }
+            } catch {
+                await MainActor.run {
+                    model?.exportProgress = nil
+                    model?.errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     func seek(to ratio: Double) {
