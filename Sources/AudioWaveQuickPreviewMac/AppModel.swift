@@ -30,29 +30,47 @@ final class AppModel: ObservableObject {
         }
     }
     @Published private(set) var exportProgress: Double?
+    /// Progress of the streaming analysis, or nil when no load is in flight.
+    @Published private(set) var loadProgress: Double?
     @Published private(set) var lastSavedPath: String?
     @Published private(set) var viewport: WaveformViewport?
     @Published var errorMessage: String?
 
     private let playbackCoordinator = PlaybackCoordinator()
     private var document: AudioDocument?
-    private var waveformPyramid: WaveformPyramid?
-    private var waveformPyramidSourceURL: URL?
-    private var waveformCachePendingURL: URL?
     private var playbackTimer: Timer?
-    private var waveformBuildTask: Task<Void, Never>?
+    /// URL of the load in flight, used to drop results from a superseded open.
+    private var loadingURL: URL?
+    private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
 
     init() {
         playbackCoordinator.onStateChange = { [weak self] in
-            guard let self else { return }
-            self.currentTime = self.playbackCoordinator.currentTime
-            self.isPlaying = self.playbackCoordinator.isPlaying
+            self?.syncPlaybackState()
         }
     }
 
+    // MARK: - Playhead
+
+    /// Playhead position within the visible span, or nil when it is offscreen.
+    var playheadViewRatio: Double? {
+        viewport?.viewRatio(for: currentTime)
+    }
+
+    var playheadOffscreenDirection: OffscreenIndicatorDirection? {
+        viewport?.offscreenIndicatorDirection(for: currentTime)
+    }
+
+    /// Playhead position across the whole file, for the minimap.
+    var playheadGlobalRatio: Double? {
+        guard let viewport, viewport.totalDuration > 0 else { return nil }
+        return min(max(currentTime / viewport.totalDuration, 0), 1)
+    }
+
     func handleInitialLaunch(arguments: [String] = CommandLine.arguments) {
-        guard document == nil else { return }
+        // `document` is only set once the async load finishes, so a second
+        // onAppear during loading must not restart it.
+        guard document == nil, loadingURL == nil else { return }
         guard let path = arguments.dropFirst().first else { return }
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
@@ -73,39 +91,92 @@ final class AppModel: ObservableObject {
     }
 
     func open(url: URL) {
+        loadTask?.cancel()
+        exportTask?.cancel()
+        // Before anything else, so a file that fails to decode cannot leave the
+        // previous one playing with the transport already reset out from under
+        // it. The space-bar monitor bypasses the disabled buttons, so a stale
+        // player would still be reachable.
+        playbackCoordinator.unload()
+        stopPlaybackTimer()
+
+        document = nil
+        waveform = []
+        minimapWaveform = []
+        viewport = nil
+        currentTime = 0
+        isPlaying = false
+        normalizeBaseDB = 0
+        offsetDB = 0
+        isBypassed = false
+        exportProgress = nil
+        lastSavedPath = nil
+        errorMessage = nil
+        fileName = url.lastPathComponent
+        loadingURL = url
+        loadProgress = 0
+
+        // Wire up the player first: it only parses the header, so playback is
+        // available while the waveform is still being analyzed.
         do {
-            let document = try AudioFileLoader.loadAudioDocument(from: url)
             try playbackCoordinator.load(url: url)
-            self.document = document
-            waveformPyramid = nil
-            waveformPyramidSourceURL = nil
-            waveformCachePendingURL = nil
-            waveformBuildTask?.cancel()
-            fileName = document.fileName
-            duration = document.duration
-            currentTime = 0
-            normalizeBaseDB = 0
-            offsetDB = 0
-            isBypassed = false
-            exportTask?.cancel()
-            exportProgress = nil
-            lastSavedPath = nil
-            applyPlaybackVolume()
+            duration = playbackCoordinator.duration
             viewport = WaveformViewport.full(
-                duration: document.duration,
+                duration: duration,
                 minimumVisibleDuration: Self.minimumVisibleDuration
             )
-            errorMessage = nil
-            refreshWaveform()
-            startPlaybackTimerIfNeeded()
+            applyPlaybackVolume()
         } catch {
+            loadingURL = nil
+            loadProgress = nil
+            duration = 0
             errorMessage = error.localizedDescription
+            return
         }
+
+        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let model = self
+            do {
+                let document = try AudioFileLoader.loadAudioDocument(from: url) { progress in
+                    Task { @MainActor in model?.updateLoadProgress(progress, for: url) }
+                }
+                await MainActor.run { model?.adopt(document) }
+            } catch is CancellationError {
+                // A newer open() already reset the state it would have published.
+            } catch {
+                await MainActor.run { model?.failLoad(of: url, with: error) }
+            }
+        }
+    }
+
+    private func updateLoadProgress(_ progress: Double, for url: URL) {
+        guard loadingURL == url else { return }
+        loadProgress = progress
+    }
+
+    private func adopt(_ document: AudioDocument) {
+        guard loadingURL == document.url else { return }
+        loadingURL = nil
+        loadProgress = nil
+        self.document = document
+        fileName = document.fileName
+        duration = document.duration
+        viewport = WaveformViewport.full(
+            duration: document.duration,
+            minimumVisibleDuration: Self.minimumVisibleDuration
+        )
+        refreshWaveform()
+    }
+
+    private func failLoad(of url: URL, with error: Error) {
+        guard loadingURL == url else { return }
+        loadingURL = nil
+        loadProgress = nil
+        errorMessage = error.localizedDescription
     }
 
     func togglePlayback() {
         playbackCoordinator.playPause()
-        isPlaying = playbackCoordinator.isPlaying
     }
 
     // MARK: - Gain
@@ -271,7 +342,6 @@ final class AppModel: ObservableObject {
         )
         playbackCoordinator.seek(to: time)
         currentTime = time
-        isPlaying = playbackCoordinator.isPlaying
     }
 
     func seekBackwardByKeyboardInterval() {
@@ -317,40 +387,47 @@ final class AppModel: ObservableObject {
         guard let document else {
             waveform = []
             minimapWaveform = []
-            waveformPyramid = nil
-            waveformPyramidSourceURL = nil
-            waveformCachePendingURL = nil
             return
         }
 
-        if waveformPyramidSourceURL == document.url, waveformPyramid != nil {
-            updateVisiblePresentation()
-            return
-        }
-
-        // Cheap first pass so the minimap shows something while the pyramid builds.
-        minimapWaveform = WaveformDownsampler.downsample(
-            samples: document.samples,
-            bucketCount: Self.minimapWaveformBucketCount
+        minimapWaveform = document.pyramid.samples(
+            for: .full(duration: document.duration, minimumVisibleDuration: Self.minimumVisibleDuration),
+            targetBucketCount: Self.minimapWaveformBucketCount
         )
-
-        if waveformCachePendingURL != document.url {
-            buildWaveformCache(for: document)
-        }
-
         updateVisiblePresentation()
     }
 
-    private func startPlaybackTimerIfNeeded() {
-        if playbackTimer == nil {
-            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.currentTime = self.playbackCoordinator.currentTime
-                    self.isPlaying = self.playbackCoordinator.isPlaying
-                }
+    /// Mirrors the player onto the published state. Assigning unconditionally
+    /// would fire `objectWillChange` 40×/second even while paused, which redraws
+    /// the entire view tree for nothing — hence the equality guards.
+    private func syncPlaybackState() {
+        let time = playbackCoordinator.currentTime
+        if currentTime != time { currentTime = time }
+
+        let playing = playbackCoordinator.isPlaying
+        if isPlaying != playing { isPlaying = playing }
+
+        if playing {
+            startPlaybackTimer()
+        } else {
+            stopPlaybackTimer()
+        }
+    }
+
+    private func startPlaybackTimer() {
+        guard playbackTimer == nil else { return }
+        // Scheduled on the main run loop, so the tick is already main-actor
+        // isolated — no need to hop through a Task per tick.
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.syncPlaybackState()
             }
         }
+    }
+
+    private func stopPlaybackTimer() {
+        playbackTimer?.invalidate()
+        playbackTimer = nil
     }
 
     private func updateVisiblePresentation() {
@@ -368,59 +445,10 @@ final class AppModel: ObservableObject {
             )).updatingMinimumVisibleDuration(Self.minimumVisibleDuration)
         self.viewport = viewport
 
-        if let waveformPyramid, waveformPyramidSourceURL == document.url {
-            waveform = waveformPyramid.samples(
-                for: viewport,
-                targetBucketCount: Self.mainWaveformBucketCount
-            )
-        } else {
-            waveform = makeVisibleWaveform(from: document, viewport: viewport)
-        }
-    }
-
-    private func makeVisibleWaveform(from document: AudioDocument, viewport: WaveformViewport) -> [Float] {
-        guard document.sampleRate > 0, !document.samples.isEmpty else { return [] }
-
-        let startIndex = max(Int((viewport.visibleStartTime * document.sampleRate).rounded(.down)), 0)
-        let endTime = min(viewport.visibleStartTime + viewport.visibleDuration, document.duration)
-        let endIndex = min(
-            max(Int((endTime * document.sampleRate).rounded(.up)), startIndex + 1),
-            document.samples.count
+        waveform = document.pyramid.samples(
+            for: viewport,
+            targetBucketCount: Self.mainWaveformBucketCount
         )
-
-        return WaveformDownsampler.downsample(
-            samples: document.samples[startIndex..<endIndex],
-            bucketCount: Self.mainWaveformBucketCount
-        )
-    }
-
-    private func buildWaveformCache(for document: AudioDocument) {
-        let documentURL = document.url
-        let samples = document.samples
-        let duration = document.duration
-        let minimumVisibleDuration = Self.minimumVisibleDuration
-        let minimapBucketCount = Self.minimapWaveformBucketCount
-
-        waveformBuildTask?.cancel()
-        waveformCachePendingURL = documentURL
-
-        waveformBuildTask = Task.detached(priority: .userInitiated) {
-            let pyramid = WaveformPyramid.build(from: samples)
-            let fullViewport = WaveformViewport.full(
-                duration: duration,
-                minimumVisibleDuration: minimumVisibleDuration
-            )
-            let minimap = pyramid.samples(for: fullViewport, targetBucketCount: minimapBucketCount)
-
-            await MainActor.run {
-                guard self.document?.url == documentURL else { return }
-                self.waveformPyramid = pyramid
-                self.waveformPyramidSourceURL = documentURL
-                self.waveformCachePendingURL = nil
-                self.minimapWaveform = minimap
-                self.updateVisiblePresentation()
-            }
-        }
     }
 }
 

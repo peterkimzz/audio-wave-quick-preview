@@ -5,7 +5,6 @@ struct WaveformMinimapView: View {
     let waveform: [Float]
     let gainScale: Float
     let viewport: WaveformViewport?
-    let currentTime: Double
     let onJump: (Double) -> Void
 
     var body: some View {
@@ -13,7 +12,6 @@ struct WaveformMinimapView: View {
             Canvas { context, size in
                 drawWaveform(in: &context, size: size)
                 drawViewport(in: &context, size: size)
-                drawPlayhead(in: &context, size: size)
             }
             .contentShape(Rectangle())
             .gesture(
@@ -73,17 +71,5 @@ struct WaveformMinimapView: View {
             with: .color(.accentColor.opacity(0.55)),
             lineWidth: 1
         )
-    }
-
-    private func drawPlayhead(in context: inout GraphicsContext, size: CGSize) {
-        guard let viewport, viewport.totalDuration > 0 else { return }
-
-        let x = size.width * (currentTime / viewport.totalDuration)
-        let path = Path { path in
-            path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: size.height))
-        }
-
-        context.stroke(path, with: .color(.red.opacity(0.85)), lineWidth: 1.5)
     }
 }

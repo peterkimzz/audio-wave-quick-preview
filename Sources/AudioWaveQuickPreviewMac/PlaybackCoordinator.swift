@@ -14,12 +14,25 @@ final class PlaybackCoordinator: NSObject {
         onStateChange?()
     }
 
+    /// Silences and drops the current player. `load` cannot do this itself: it
+    /// throws before reaching the assignment, leaving the previous file audible
+    /// with no transport bound to it.
+    func unload() {
+        player?.stop()
+        player = nil
+        onStateChange?()
+    }
+
     var isPlaying: Bool {
         player?.isPlaying ?? false
     }
 
     var currentTime: Double {
         player?.currentTime ?? 0
+    }
+
+    var duration: Double {
+        player?.duration ?? 0
     }
 
     func playPause() {

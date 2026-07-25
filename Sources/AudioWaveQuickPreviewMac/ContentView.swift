@@ -88,15 +88,20 @@ struct ContentView: View {
                 WaveformView(
                     waveform: model.waveform,
                     gainScale: model.waveformGainScale,
-                    viewport: model.viewport,
-                    duration: model.duration,
-                    currentTime: model.currentTime,
+                    loadProgress: model.loadProgress,
                     onSeek: model.seek(to:),
                     onMagnify: model.zoomWaveform(scale:anchorRatio:),
                     onHorizontalScroll: model.panWaveform(byViewRatio:)
                 )
                 .frame(height: 120)
                 .frame(maxWidth: .infinity)
+                .overlay {
+                    PlayheadOverlay(
+                        ratio: model.playheadViewRatio,
+                        lineWidth: 2,
+                        offscreenDirection: model.playheadOffscreenDirection
+                    )
+                }
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -109,11 +114,13 @@ struct ContentView: View {
                     waveform: model.minimapWaveform,
                     gainScale: model.waveformGainScale,
                     viewport: model.viewport,
-                    currentTime: model.currentTime,
                     onJump: model.jumpViewport(toGlobalRatio:)
                 )
                 .frame(height: 18)
                 .frame(maxWidth: .infinity)
+                .overlay {
+                    PlayheadOverlay(ratio: model.playheadGlobalRatio, lineWidth: 1.5)
+                }
                 .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
 
