@@ -3,6 +3,7 @@ import SwiftUI
 
 struct WaveformMinimapView: View {
     let waveform: [Float]
+    let gainScale: Float
     let viewport: WaveformViewport?
     let currentTime: Double
     let onJump: (Double) -> Void
@@ -40,7 +41,7 @@ struct WaveformMinimapView: View {
         let maxAmplitude = size.height * 0.42
 
         for (index, value) in waveform.enumerated() {
-            let amplitude = min(CGFloat(value), 1) * maxAmplitude
+            let amplitude = min(CGFloat(value * gainScale), 1) * maxAmplitude
             let x = CGFloat(index) * bucketWidth + (bucketWidth / 2)
             path.move(to: CGPoint(x: x, y: midY - amplitude))
             path.addLine(to: CGPoint(x: x, y: midY + amplitude))

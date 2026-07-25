@@ -89,9 +89,12 @@ struct ContentView: View {
                 .disabled(model.viewport == nil)
             }
 
+            GainControls(model: model)
+
             VStack(spacing: 7) {
                 WaveformView(
                     waveform: model.waveform,
+                    gainScale: model.waveformGainScale,
                     viewport: model.viewport,
                     duration: model.duration,
                     currentTime: model.currentTime,
@@ -109,6 +112,7 @@ struct ContentView: View {
 
                 WaveformMinimapView(
                     waveform: model.minimapWaveform,
+                    gainScale: model.waveformGainScale,
                     viewport: model.viewport,
                     currentTime: model.currentTime,
                     onJump: model.jumpViewport(toGlobalRatio:)
@@ -122,6 +126,10 @@ struct ContentView: View {
                 isExpanded: $showsAdvancedOptions,
                 content: {
                 VStack(alignment: .leading, spacing: 12) {
+                    FineTuneControls(model: model)
+
+                    Divider()
+
                     ParameterSlider(
                         title: "Sensitivity",
                         value: $model.threshold,
@@ -201,6 +209,142 @@ struct ContentView: View {
         }
 
         return true
+    }
+}
+
+/// Primary loudness-matching controls: set a target, Normalize to it, compare
+/// with Bypass, and Save. Manual per-dB gain lives in Advanced Options.
+private struct GainControls: View {
+    @ObservedObject var model: AppModel
+
+    private var bypassBinding: Binding<Bool> {
+        Binding(get: { model.isBypassed }, set: { _ in model.toggleBypass() })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Text("Target")
+                    .font(.headline)
+
+                Slider(
+                    value: $model.targetLoudnessDBFS,
+                    in: GainCalculations.minTargetLoudnessDBFS...GainCalculations.maxTargetLoudnessDBFS,
+                    step: 1
+                )
+                .frame(minWidth: 160)
+                .disabled(!model.hasDocument)
+                .help("Target loudness. Negative only (0 = digital max); typical −24 … −12.")
+
+                Text("\(Int(model.targetLoudnessDBFS)) dBFS")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 74, alignment: .trailing)
+
+                Button("Normalize") { model.normalizeToTarget() }
+                    .disabled(!model.hasDocument)
+                    .help("Set gain so the average loudness (RMS) meets the target, without clipping.")
+
+                Toggle("Bypass", isOn: bypassBinding)
+                    .toggleStyle(.button)
+                    .disabled(!model.hasDocument)
+                    .help("Listen to the original without changing the save gain.")
+
+                Spacer()
+
+                Button("Save As…") { model.saveAs() }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                    .disabled(!model.canSave)
+            }
+
+            statusRow
+        }
+    }
+
+    @ViewBuilder
+    private var statusRow: some View {
+        if let progress = model.exportProgress {
+            HStack(spacing: 10) {
+                ProgressView(value: progress)
+                    .frame(maxWidth: 220)
+                Text("\(Int(progress * 100))%")
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Button("Cancel") { model.cancelExport() }
+                    .controlSize(.small)
+            }
+        } else if model.hasDocument {
+            HStack(spacing: 12) {
+                Text("Loudness: \(loudnessText)")
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                if model.isClipping {
+                    Text("Too loud to save — max safe gain \(String(format: "%+.1f", model.maxSafeGainDB)) dB")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.red)
+                } else if let saved = model.lastSavedPath {
+                    Text("Saved to \(saved)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+    }
+
+    private var loudnessText: String {
+        let value = model.estimatedLoudnessDBFS
+        return value.isFinite ? String(format: "%.1f dBFS", value) : "-∞ dBFS"
+    }
+}
+
+/// Manual by-ear fine-tune, shown under Advanced Options. It layers a ± offset
+/// on top of the gain that Normalize set, rather than replacing it.
+private struct FineTuneControls: View {
+    @ObservedObject var model: AppModel
+
+    private var offsetBinding: Binding<Double> {
+        Binding(get: { model.offsetDB }, set: { model.setOffset($0) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Text("Fine-tune")
+                    .font(.headline)
+
+                Slider(value: offsetBinding, in: GainCalculations.minOffsetDB...GainCalculations.maxOffsetDB, step: GainCalculations.stepDB)
+                    .frame(minWidth: 160)
+                    .disabled(!model.hasDocument)
+                    .help("Nudge the loudness up or down by ear, on top of Normalize.")
+
+                Text("\(signed(model.offsetDB)) dB")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 62, alignment: .trailing)
+
+                Button("0 dB Reset") { model.resetGain() }
+                    .disabled(!model.hasDocument || (model.normalizeBaseDB == 0 && model.offsetDB == 0))
+                    .help("Back to the original level (clears Normalize and fine-tune).")
+
+                Spacer()
+
+                Text("Total gain: \(signed(model.gainDB)) dB   Est. peak: \(peakText)")
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func signed(_ value: Double) -> String {
+        String(format: "%+.1f", value)
+    }
+
+    private var peakText: String {
+        let value = model.estimatedPeakDBFS
+        return value.isFinite ? String(format: "%.1f dBFS", value) : "-∞ dBFS"
     }
 }
 
