@@ -10,21 +10,15 @@ struct ContentView: View {
 
     @ObservedObject var model: AppModel
     @State private var isDropTargeted = false
-    @State private var showsAdvancedOptions = false
 
     var body: some View {
         let playbackControl = PlaybackControlPresentation.primaryControl(isPlaying: model.isPlaying)
 
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.fileName)
-                        .font(.title2.weight(.semibold))
-                        .lineLimit(1)
-                    Text(model.statusMessage)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                Text(model.fileName)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(1)
 
                 Spacer()
 
@@ -130,59 +124,6 @@ struct ContentView: View {
                 .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
 
-            DisclosureGroup(
-                isExpanded: $showsAdvancedOptions,
-                content: {
-                    VStack(alignment: .leading, spacing: 12) {
-                        FineTuneControls(model: model)
-
-                        Divider()
-
-                        ParameterSlider(
-                            title: "Sensitivity",
-                            value: $model.threshold,
-                            range: 0.005...0.2,
-                            format: "%.3f"
-                        )
-                        ParameterSlider(
-                            title: "Minimum Sound",
-                            value: $model.minimumSoundDuration,
-                            range: 0.02...1.0,
-                            suffix: "s"
-                        )
-                        ParameterSlider(
-                            title: "Merge Silence",
-                            value: $model.mergeSilenceDuration,
-                            range: 0.02...0.8,
-                            suffix: "s"
-                        )
-                        ParameterSlider(
-                            title: "Minimum Visible Span",
-                            value: $model.minimumVisibleDuration,
-                            range: 5...30,
-                            format: "%.0f",
-                            suffix: "s"
-                        )
-                    }
-                    .padding(.top, 10)
-                },
-                label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: showsAdvancedOptions ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Advanced Options")
-                            .font(.subheadline.weight(.medium))
-                    }
-                    .foregroundStyle(.secondary.opacity(0.78))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-            )
-            .onChange(of: model.threshold) { _, _ in model.refreshAnalysis() }
-            .onChange(of: model.minimumSoundDuration) { _, _ in model.refreshAnalysis() }
-            .onChange(of: model.mergeSilenceDuration) { _, _ in model.refreshAnalysis() }
-            .onChange(of: model.minimumVisibleDuration) { _, _ in model.updateMinimumVisibleDuration() }
-
             if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .font(.footnote)
@@ -192,7 +133,7 @@ struct ContentView: View {
         .padding(.horizontal, 24)
         .padding(.top, 14)
         .padding(.bottom, 14)
-        .frame(minWidth: 900, minHeight: 320)
+        .frame(minWidth: 900, minHeight: 400)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             model.handleInitialLaunch()
@@ -221,8 +162,15 @@ struct ContentView: View {
     }
 }
 
-/// Primary loudness-matching controls: set a target, Normalize to it, compare
-/// with Bypass, and Save. Manual per-dB gain lives in Advanced Options.
+/// Shared column widths so the Target and Fine-tune rows line up.
+private enum GainRowMetrics {
+    static let labelWidth: CGFloat = 74
+    static let sliderWidth: CGFloat = 200
+    static let valueWidth: CGFloat = 74
+}
+
+/// Loudness controls: set a target, Normalize to it, nudge by ear with
+/// Fine-tune, compare with Bypass, and Save.
 private struct GainControls: View {
     @ObservedObject var model: AppModel
 
@@ -235,20 +183,21 @@ private struct GainControls: View {
             HStack(spacing: 12) {
                 Text("Target")
                     .font(.headline)
+                    .frame(width: GainRowMetrics.labelWidth, alignment: .leading)
 
                 Slider(
                     value: $model.targetLoudnessDBFS,
                     in: GainCalculations.minTargetLoudnessDBFS...GainCalculations.maxTargetLoudnessDBFS,
                     step: 1
                 )
-                .frame(minWidth: 160)
+                .frame(width: GainRowMetrics.sliderWidth)
                 .disabled(!model.hasDocument)
                 .help("Target loudness. Negative only (0 = digital max); typical −24 … −12.")
 
                 Text("\(Int(model.targetLoudnessDBFS)) dBFS")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .frame(width: 74, alignment: .trailing)
+                    .frame(width: GainRowMetrics.valueWidth, alignment: .trailing)
 
                 Button("Normalize") { model.normalizeToTarget() }
                     .disabled(!model.hasDocument)
@@ -265,6 +214,8 @@ private struct GainControls: View {
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(!model.canSave)
             }
+
+            FineTuneControls(model: model)
 
             statusRow
         }
@@ -284,15 +235,28 @@ private struct GainControls: View {
             }
         } else if model.hasDocument {
             HStack(spacing: 12) {
-                Text("Loudness: \(loudnessText)")
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Loudness: \(loudnessText) · Total gain: \(String(format: "%+.1f", model.gainDB)) dB"
+                        + " · Est. peak: \(peakText)"
+                )
+                .font(.system(.footnote, design: .monospaced))
+                .foregroundStyle(.secondary)
 
                 if model.isClipping {
                     Text("Too loud to save — max safe gain \(String(format: "%+.1f", model.maxSafeGainDB)) dB")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.red)
-                } else if let saved = model.lastSavedPath {
+                } else if model.isPeakLimited {
+                    Text("Peak-limited — can't reach the target without clipping")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.red)
+                }
+
+                // Its own slot, not an `else` branch: the warnings above are
+                // derived from the file and the target, so they can stay true
+                // for the whole session and would otherwise permanently hide
+                // the one confirmation the user gets after a save.
+                if let saved = model.lastSavedPath {
                     Text("Saved to \(saved)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -307,10 +271,15 @@ private struct GainControls: View {
         let value = model.estimatedLoudnessDBFS
         return value.isFinite ? String(format: "%.1f dBFS", value) : "-∞ dBFS"
     }
+
+    private var peakText: String {
+        let value = model.estimatedPeakDBFS
+        return value.isFinite ? String(format: "%.1f dBFS", value) : "-∞ dBFS"
+    }
 }
 
-/// Manual by-ear fine-tune, shown under Advanced Options. It layers a ± offset
-/// on top of the gain that Normalize set, rather than replacing it.
+/// Manual by-ear fine-tune. It layers a ± offset on top of the gain that
+/// Normalize set, rather than replacing it.
 private struct FineTuneControls: View {
     @ObservedObject var model: AppModel
 
@@ -319,66 +288,29 @@ private struct FineTuneControls: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text("Fine-tune")
-                    .font(.headline)
+        HStack(spacing: 12) {
+            Text("Fine-tune")
+                .font(.headline)
+                .frame(width: GainRowMetrics.labelWidth, alignment: .leading)
 
-                Slider(
-                    value: offsetBinding, in: GainCalculations.minOffsetDB...GainCalculations.maxOffsetDB,
-                    step: GainCalculations.stepDB
-                )
-                .frame(minWidth: 160)
-                .disabled(!model.hasDocument)
-                .help("Nudge the loudness up or down by ear, on top of Normalize.")
+            Slider(
+                value: offsetBinding, in: GainCalculations.minOffsetDB...GainCalculations.maxOffsetDB,
+                step: GainCalculations.stepDB
+            )
+            .frame(width: GainRowMetrics.sliderWidth)
+            .disabled(!model.hasDocument)
+            .help("Nudge the loudness up or down by ear, on top of Normalize.")
 
-                Text("\(signed(model.offsetDB)) dB")
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 62, alignment: .trailing)
+            Text(String(format: "%+.1f dB", model.offsetDB))
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: GainRowMetrics.valueWidth, alignment: .trailing)
 
-                Button("0 dB Reset") { model.resetGain() }
-                    .disabled(!model.hasDocument || (model.normalizeBaseDB == 0 && model.offsetDB == 0))
-                    .help("Back to the original level (clears Normalize and fine-tune).")
+            Button("0 dB Reset") { model.resetGain() }
+                .disabled(!model.hasDocument || (model.normalizeBaseDB == 0 && model.offsetDB == 0))
+                .help("Back to the original level (clears Normalize and fine-tune).")
 
-                Spacer()
-
-                Text("Total gain: \(signed(model.gainDB)) dB   Est. peak: \(peakText)")
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func signed(_ value: Double) -> String {
-        String(format: "%+.1f", value)
-    }
-
-    private var peakText: String {
-        let value = model.estimatedPeakDBFS
-        return value.isFinite ? String(format: "%.1f dBFS", value) : "-∞ dBFS"
-    }
-}
-
-private struct ParameterSlider: View {
-    let title: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    var format: String = "%.2f"
-    var suffix = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.headline)
-                Spacer()
-                Text(String(format: format, value) + suffix)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-
-            Slider(value: $value, in: range)
+            Spacer()
         }
     }
 }

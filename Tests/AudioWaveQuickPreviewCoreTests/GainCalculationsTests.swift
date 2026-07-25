@@ -74,6 +74,27 @@ struct GainCalculationsTests {
     }
 
     @Test
+    func peakLimitedOnlyWhenTheCeilingIsWhatBlocksTheTarget() {
+        // Safe gain floors to exactly 0 dB, so Normalize can't move at all.
+        let atCeiling = Float(pow(10.0, -0.3 / 20.0))
+        #expect(
+            GainCalculations.isPeakLimited(currentRMS: 0.03, originalPeak: atCeiling, targetDBFS: -18))
+
+        // 5.5 dB of headroom and only 0.2 dB needed: not peak-limited. The 0.5 dB
+        // snap inside `gainForTargetLoudness` used to make this look limited.
+        let justBelowTarget = Float(pow(10.0, -18.2 / 20.0))
+        #expect(
+            !GainCalculations.isPeakLimited(
+                currentRMS: justBelowTarget, originalPeak: 0.5, targetDBFS: -18))
+
+        // Target below the current loudness needs attenuation, never limited.
+        #expect(!GainCalculations.isPeakLimited(currentRMS: 0.05, originalPeak: 0.99, targetDBFS: -40))
+
+        // Silence has no measurable loudness to lift.
+        #expect(!GainCalculations.isPeakLimited(currentRMS: 0, originalPeak: 0, targetDBFS: -18))
+    }
+
+    @Test
     func fineTuneOffsetSnapsAndClamps() {
         #expect(GainCalculations.snapOffset(2.2) == 2)
         #expect(GainCalculations.snapOffset(2.3) == 2.5)

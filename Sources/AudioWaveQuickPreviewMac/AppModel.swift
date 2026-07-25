@@ -9,6 +9,8 @@ final class AppModel: ObservableObject {
     private static let minimapWaveformBucketCount = 700
     private static let mainWaveformBucketCount = 720
     private static let keyboardSeekInterval = 10.0
+    /// Zoom-in limit: the waveform never shows less than this much time.
+    private static let minimumVisibleDuration = 5.0
 
     @Published var fileName = "No audio selected"
     @Published var waveform: [Float] = []
@@ -31,17 +33,11 @@ final class AppModel: ObservableObject {
     /// Progress of the streaming analysis, or nil when no load is in flight.
     @Published private(set) var loadProgress: Double?
     @Published private(set) var lastSavedPath: String?
-    @Published var threshold: Double = 0.025
-    @Published var minimumSoundDuration: Double = 0.12
-    @Published var mergeSilenceDuration: Double = 0.08
-    @Published var minimumVisibleDuration: Double = 5
     @Published private(set) var viewport: WaveformViewport?
-    @Published var statusMessage = "Open an audio file to inspect where sound is present."
     @Published var errorMessage: String?
 
     private let playbackCoordinator = PlaybackCoordinator()
     private var document: AudioDocument?
-    private var detectedSegments: [SoundSegment] = []
     private var playbackTimer: Timer?
     /// URL of the load in flight, used to drop results from a superseded open.
     private var loadingURL: URL?
@@ -105,7 +101,6 @@ final class AppModel: ObservableObject {
         stopPlaybackTimer()
 
         document = nil
-        detectedSegments = []
         waveform = []
         minimapWaveform = []
         viewport = nil
@@ -128,7 +123,7 @@ final class AppModel: ObservableObject {
             duration = playbackCoordinator.duration
             viewport = WaveformViewport.full(
                 duration: duration,
-                minimumVisibleDuration: minimumVisibleDuration
+                minimumVisibleDuration: Self.minimumVisibleDuration
             )
             applyPlaybackVolume()
         } catch {
@@ -136,11 +131,9 @@ final class AppModel: ObservableObject {
             loadProgress = nil
             duration = 0
             errorMessage = error.localizedDescription
-            statusMessage = "Unable to open the selected file."
             return
         }
 
-        statusMessage = "Analyzing \(url.lastPathComponent)…"
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
             let model = self
             do {
@@ -170,9 +163,9 @@ final class AppModel: ObservableObject {
         duration = document.duration
         viewport = WaveformViewport.full(
             duration: document.duration,
-            minimumVisibleDuration: minimumVisibleDuration
+            minimumVisibleDuration: Self.minimumVisibleDuration
         )
-        refreshAnalysis()
+        refreshWaveform()
     }
 
     private func failLoad(of url: URL, with error: Error) {
@@ -180,7 +173,6 @@ final class AppModel: ObservableObject {
         loadingURL = nil
         loadProgress = nil
         errorMessage = error.localizedDescription
-        statusMessage = "Unable to open the selected file."
     }
 
     func togglePlayback() {
@@ -218,6 +210,19 @@ final class AppModel: ObservableObject {
         return GainCalculations.isClipping(originalPeak: document.peak, gainDB: gainDB)
     }
 
+    /// True when the peak ceiling puts the loudness target out of reach, so
+    /// Normalize can't get there. Derived from the file and the target rather
+    /// than from `normalizeBaseDB`, which would miss a file whose safe gain is
+    /// exactly 0 dB — the most peak-limited case there is.
+    var isPeakLimited: Bool {
+        guard let document else { return false }
+        return GainCalculations.isPeakLimited(
+            currentRMS: document.rms,
+            originalPeak: document.peak,
+            targetDBFS: targetLoudnessDBFS
+        )
+    }
+
     var maxSafeGainDB: Double {
         GainCalculations.maxSafeGainDB(originalPeak: document?.peak ?? 0)
     }
@@ -250,16 +255,6 @@ final class AppModel: ObservableObject {
         )
         lastSavedPath = nil
         applyPlaybackVolume()
-
-        // The "Loudness" readout below the slider shows the resulting value, so
-        // keep this line number-free to avoid a duplicate dBFS in the title area.
-        // Reachability is judged on the base alone (before the by-ear offset).
-        let reached = GainCalculations.dBFS(document.rms) + normalizeBaseDB
-        if reached < targetLoudnessDBFS - 0.05 {
-            statusMessage = "Peak limit reached — couldn't fully reach the target."
-        } else {
-            statusMessage = "Normalized to target."
-        }
     }
 
     func toggleBypass() {
@@ -312,12 +307,10 @@ final class AppModel: ObservableObject {
                 await MainActor.run {
                     model?.exportProgress = nil
                     model?.lastSavedPath = destination.path
-                    model?.statusMessage = "Saved \(destination.lastPathComponent)"
                 }
             } catch is CancellationError {
                 await MainActor.run {
                     model?.exportProgress = nil
-                    model?.statusMessage = "Export canceled."
                 }
             } catch {
                 await MainActor.run {
@@ -384,55 +377,24 @@ final class AppModel: ObservableObject {
         updateVisiblePresentation()
     }
 
-    func updateMinimumVisibleDuration() {
-        guard let viewport else { return }
-        self.viewport = viewport.updatingMinimumVisibleDuration(minimumVisibleDuration)
-        updateVisiblePresentation()
-    }
-
     func jumpViewport(toGlobalRatio ratio: Double) {
         guard let viewport else { return }
         self.viewport = viewport.centeredOnGlobalRatio(ratio)
         updateVisiblePresentation()
     }
 
-    func refreshAnalysis() {
+    func refreshWaveform() {
         guard let document else {
             waveform = []
             minimapWaveform = []
-            if loadingURL == nil {
-                statusMessage = "Open an audio file to inspect where sound is present."
-            }
             return
         }
 
-        detectedSegments = AudioAnalysisEngine.analyze(
-            envelope: document.envelope,
-            configuration: AnalysisConfiguration(
-                threshold: Float(threshold),
-                minimumSoundDuration: minimumSoundDuration,
-                mergeSilenceDuration: mergeSilenceDuration
-            )
-        )
-        statusMessage = makeStatusMessage(segments: detectedSegments, duration: document.duration)
-
         minimapWaveform = document.pyramid.samples(
-            for: .full(duration: document.duration, minimumVisibleDuration: minimumVisibleDuration),
+            for: .full(duration: document.duration, minimumVisibleDuration: Self.minimumVisibleDuration),
             targetBucketCount: Self.minimapWaveformBucketCount
         )
         updateVisiblePresentation()
-    }
-
-    private func makeStatusMessage(segments: [SoundSegment], duration: Double) -> String {
-        let segmentCount = segments.count
-        if segmentCount == 0 {
-            return "No sound sections detected at the current sensitivity."
-        }
-
-        let soundDuration = segments.reduce(0) { $0 + ($1.endTime - $1.startTime) }
-        return
-            "\(segmentCount) sound section\(segmentCount == 1 ? "" : "s") detected across \(TimeFormatter.string(from: duration))."
-            + " Total sound: \(TimeFormatter.string(from: soundDuration))."
     }
 
     /// Mirrors the player onto the published state. Assigning unconditionally
@@ -479,8 +441,8 @@ final class AppModel: ObservableObject {
             (self.viewport
             ?? .full(
                 duration: document.duration,
-                minimumVisibleDuration: minimumVisibleDuration
-            )).updatingMinimumVisibleDuration(minimumVisibleDuration)
+                minimumVisibleDuration: Self.minimumVisibleDuration
+            )).updatingMinimumVisibleDuration(Self.minimumVisibleDuration)
         self.viewport = viewport
 
         waveform = document.pyramid.samples(

@@ -17,8 +17,8 @@ enum AudioFileLoaderError: LocalizedError {
 }
 
 /// Streams the file once, in chunks, accumulating only what the UI needs:
-/// peak, RMS, the waveform pyramid, and the RMS envelope. Nothing proportional
-/// to file length is retained, so a 230 MB WAV costs a few MB instead of ~1 GB.
+/// peak, RMS, and the waveform pyramid. Nothing proportional to file length is
+/// retained, so a 230 MB WAV costs a few MB instead of ~1 GB.
 enum AudioFileLoader {
     private static let chunkFrames: AVAudioFrameCount = 65_536
 
@@ -41,9 +41,12 @@ enum AudioFileLoader {
         }
 
         var pyramidBuilder = WaveformPyramid.Builder(totalSampleCount: totalFrames)
-        var envelopeBuilder = RMSEnvelope.Builder(sampleRate: format.sampleRate)
         var peak: Float = 0
         var sumOfSquares = 0.0
+        // Counted from what was actually read, not from `file.length`: a
+        // truncated file reports more than it yields, and this drives both the
+        // duration and the RMS divisor.
+        var frameLength = 0
         let divisor = max(Float(channelCount), 1)
         var mono = [Float](repeating: 0, count: Int(chunkFrames))
         var reportedPercent = 0
@@ -57,6 +60,7 @@ enum AudioFileLoader {
             try file.read(into: buffer, frameCount: min(chunkFrames, remaining))
             let frames = Int(buffer.frameLength)
             if frames == 0 { break }
+            frameLength += frames
 
             guard let channels = buffer.floatChannelData else {
                 throw AudioFileLoaderError.unreadableFile
@@ -82,9 +86,7 @@ enum AudioFileLoader {
             }
 
             mono.withUnsafeBufferPointer { buffer in
-                let chunk = UnsafeBufferPointer(rebasing: buffer[0..<frames])
-                pyramidBuilder.append(chunk)
-                envelopeBuilder.append(chunk)
+                pyramidBuilder.append(UnsafeBufferPointer(rebasing: buffer[0..<frames]))
             }
 
             let progress = totalFrames > 0 ? Double(file.framePosition) / Double(totalFrames) : 1
@@ -96,15 +98,11 @@ enum AudioFileLoader {
         }
         onProgress(1)
 
-        let envelope = envelopeBuilder.finish()
-        let frameLength = envelope.totalSampleCount
-
         return AudioDocument(
             url: url,
             fileName: url.lastPathComponent,
             duration: Double(frameLength) / format.sampleRate,
             pyramid: pyramidBuilder.finish(),
-            envelope: envelope,
             peak: peak,
             rms: frameLength > 0 ? Float((sumOfSquares / Double(frameLength)).squareRoot()) : 0
         )

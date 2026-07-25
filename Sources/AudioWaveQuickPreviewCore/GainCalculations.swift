@@ -86,6 +86,23 @@ public enum GainCalculations {
         return snap(capped)
     }
 
+    /// True when the clipping ceiling — not the user — is what keeps `currentRMS`
+    /// from reaching `targetDBFS`.
+    ///
+    /// Compares the gain actually *needed* against the largest safe gain. Judging
+    /// it from `gainForTargetLoudness` instead would misfire: that result is
+    /// snapped to the 0.5 dB grid, so it can land up to 0.25 dB below the target
+    /// even with plenty of headroom, which reads as a peak limit that isn't there.
+    public static func isPeakLimited(
+        currentRMS: Float,
+        originalPeak: Float,
+        targetDBFS: Double
+    ) -> Bool {
+        guard currentRMS > 0 else { return false }
+        let needed = targetDBFS - dBFS(currentRMS)
+        return needed > maxSafeGainDB(originalPeak: originalPeak) + 0.05
+    }
+
     /// `song.mp3` + `+3.0 dB` → `song_gain+3.0dB.wav`. Sign is always shown.
     public static func outputFileName(originalName: String, gainDB: Double) -> String {
         let base = (originalName as NSString).deletingPathExtension
