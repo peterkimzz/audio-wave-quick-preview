@@ -137,7 +137,10 @@ final class AppModel: ObservableObject {
     }
 
     var isClipping: Bool {
-        guard let document else { return false }
+        // Attenuation or unity can't introduce clipping, so an already-hot source
+        // (peak ≥ ceiling) is still saveable at 0 dB or below — only a positive
+        // gain that pushes the peak past the ceiling blocks Save.
+        guard let document, gainDB > 0 else { return false }
         return GainCalculations.isClipping(originalPeak: document.peak, gainDB: gainDB)
     }
 
@@ -150,6 +153,7 @@ final class AppModel: ObservableObject {
     /// Manual by-ear fine-tune, layered on top of the Normalize base.
     func setOffset(_ db: Double) {
         offsetDB = GainCalculations.snapOffset(db)
+        lastSavedPath = nil
         applyPlaybackVolume()
     }
 
@@ -157,6 +161,7 @@ final class AppModel: ObservableObject {
     func resetGain() {
         normalizeBaseDB = 0
         offsetDB = 0
+        lastSavedPath = nil
         applyPlaybackVolume()
     }
 
@@ -169,6 +174,7 @@ final class AppModel: ObservableObject {
             originalPeak: document.peak,
             targetDBFS: targetLoudnessDBFS
         )
+        lastSavedPath = nil
         applyPlaybackVolume()
 
         // The "Loudness" readout below the slider shows the resulting value, so
@@ -188,9 +194,12 @@ final class AppModel: ObservableObject {
     }
 
     private func applyPlaybackVolume() {
-        // Attenuation is exact; boost is capped at unity (AVAudioPlayer limit).
+        // AVAudioPlayer volume can't exceed unity, so a boost would make the
+        // gained and bypassed sides both play at 1.0 (Bypass becomes inaudible).
+        // Keep the relative difference audible by attenuating whichever side
+        // would exceed 1.0 instead.
         let scale = GainCalculations.linearScale(forDB: gainDB)
-        playbackCoordinator.setVolume(isBypassed ? 1 : Float(min(scale, 1)))
+        playbackCoordinator.setVolume(Float(isBypassed ? min(1 / scale, 1) : min(scale, 1)))
     }
 
     func saveAs() {
