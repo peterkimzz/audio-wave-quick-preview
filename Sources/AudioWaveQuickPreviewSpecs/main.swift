@@ -334,10 +334,9 @@ private func expectEqual(_ actual: [Float], _ expected: [Float], accuracy: Float
         throw SpecFailure(message: "Expected count \(expected.count), got \(actual.count)")
     }
 
-    for (actualValue, expectedValue) in zip(actual, expected) {
-        if abs(actualValue - expectedValue) > accuracy {
-            throw SpecFailure(message: "Expected \(expected), got \(actual)")
-        }
+    for (actualValue, expectedValue) in zip(actual, expected)
+    where abs(actualValue - expectedValue) > accuracy {
+        throw SpecFailure(message: "Expected \(expected), got \(actual)")
     }
 }
 

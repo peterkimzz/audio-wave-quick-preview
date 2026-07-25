@@ -12,7 +12,7 @@ struct WaveformView: View {
     let onHorizontalScroll: (_ deltaRatio: Double) -> Void
 
     var body: some View {
-        GeometryReader { geometry in
+        GeometryReader { _ in
             ZStack {
                 Canvas { context, size in
                     drawWaveform(in: &context, size: size)

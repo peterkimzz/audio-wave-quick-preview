@@ -66,9 +66,11 @@ struct AudioWaveQuickPreviewMacApp: App {
             git.waitUntilExit()
             guard git.terminationStatus == 0 else { return nil }
 
-            let out = String(
-                decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard
+                let out = String(bytes: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            else { return nil }
             return (out.isEmpty || out == "HEAD") ? nil : out
         }
     }
