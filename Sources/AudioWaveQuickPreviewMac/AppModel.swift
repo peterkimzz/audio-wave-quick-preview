@@ -140,17 +140,16 @@ final class AppModel: ObservableObject {
     }
 
     /// True when the peak ceiling puts the loudness target out of reach, so
-    /// Normalize can't get there. Judged on what Normalize *would* set, not on
-    /// the current base — otherwise a file whose safe gain is exactly 0 dB (the
-    /// most peak-limited case there is) would look like it was never normalized.
+    /// Normalize can't get there. Derived from the file and the target rather
+    /// than from `normalizeBaseDB`, which would miss a file whose safe gain is
+    /// exactly 0 dB — the most peak-limited case there is.
     var isPeakLimited: Bool {
-        guard let document, document.rms > 0 else { return false }
-        let reachableBaseDB = GainCalculations.gainForTargetLoudness(
+        guard let document else { return false }
+        return GainCalculations.isPeakLimited(
             currentRMS: document.rms,
             originalPeak: document.peak,
             targetDBFS: targetLoudnessDBFS
         )
-        return GainCalculations.dBFS(document.rms) + reachableBaseDB < targetLoudnessDBFS - 0.05
     }
 
     var maxSafeGainDB: Double {

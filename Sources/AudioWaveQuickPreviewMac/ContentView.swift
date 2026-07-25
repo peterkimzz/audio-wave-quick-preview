@@ -243,7 +243,13 @@ private struct GainControls: View {
                     Text("Peak-limited — can't reach the target without clipping")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.red)
-                } else if let saved = model.lastSavedPath {
+                }
+
+                // Its own slot, not an `else` branch: the warnings above are
+                // derived from the file and the target, so they can stay true
+                // for the whole session and would otherwise permanently hide
+                // the one confirmation the user gets after a save.
+                if let saved = model.lastSavedPath {
                     Text("Saved to \(saved)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
