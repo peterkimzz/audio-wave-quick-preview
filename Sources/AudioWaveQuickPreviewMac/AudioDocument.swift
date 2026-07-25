@@ -1,11 +1,17 @@
+import AudioWaveQuickPreviewCore
 import Foundation
 
+/// Everything the UI needs about a file, without the samples themselves. The raw
+/// PCM is streamed once at load and discarded: the pyramid covers drawing, the
+/// envelope covers segment detection, and export re-reads from disk.
 struct AudioDocument: Sendable {
     let url: URL
     let fileName: String
     let duration: Double
-    let sampleRate: Double
-    let samples: [Float]
+    /// Multi-resolution peak levels backing the waveform and minimap.
+    let pyramid: WaveformPyramid
+    /// Per-window RMS backing sound-segment detection.
+    let envelope: RMSEnvelope
     /// Largest absolute sample across all original channels (pre-downmix).
     /// Used to judge clipping and the maximum safe gain for export.
     let peak: Float

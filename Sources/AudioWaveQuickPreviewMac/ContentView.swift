@@ -94,6 +94,7 @@ struct ContentView: View {
                 WaveformView(
                     waveform: model.waveform,
                     gainScale: model.waveformGainScale,
+                    loadProgress: model.loadProgress,
                     onSeek: model.seek(to:),
                     onMagnify: model.zoomWaveform(scale:anchorRatio:),
                     onHorizontalScroll: model.panWaveform(byViewRatio:)

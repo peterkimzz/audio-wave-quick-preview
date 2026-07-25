@@ -3,6 +3,8 @@ import SwiftUI
 struct WaveformView: View {
     let waveform: [Float]
     let gainScale: Float
+    /// Progress of the streaming analysis, or nil when nothing is loading.
+    let loadProgress: Double?
     let onSeek: (Double) -> Void
     let onMagnify: (_ scale: Double, _ anchorRatio: Double) -> Void
     let onHorizontalScroll: (_ deltaRatio: Double) -> Void
@@ -13,7 +15,14 @@ struct WaveformView: View {
                 drawWaveform(in: &context, size: size)
             }
 
-            if waveform.isEmpty {
+            if let loadProgress {
+                ProgressView(value: loadProgress) {
+                    Text("Analyzing audio…")
+                }
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 240)
+                .padding(.horizontal, 24)
+            } else if waveform.isEmpty {
                 ContentUnavailableView(
                     "Drop or Open Audio",
                     systemImage: "waveform",

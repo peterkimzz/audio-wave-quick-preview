@@ -22,6 +22,10 @@ final class PlaybackCoordinator: NSObject {
         player?.currentTime ?? 0
     }
 
+    var duration: Double {
+        player?.duration ?? 0
+    }
+
     func playPause() {
         guard let player else { return }
         if player.isPlaying {

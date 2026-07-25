@@ -12,24 +12,20 @@ struct AudioAnalysisEngineTests {
             + Array(repeating: Float(0), count: 5)
             + Array(repeating: Float(0.7), count: 15)
             + Array(repeating: Float(0), count: 20)
-        let configuration = AnalysisConfiguration(
-            threshold: 0.2,
-            minimumSoundDuration: 0.015,
-            mergeSilenceDuration: 0.01,
-            windowDuration: 0.005,
-            waveformBucketCount: 8
+        let envelope = RMSEnvelope.build(samples: samples, sampleRate: 1_000, windowDuration: 0.005)
+
+        let segments = AudioAnalysisEngine.analyze(
+            envelope: envelope,
+            configuration: AnalysisConfiguration(
+                threshold: 0.2,
+                minimumSoundDuration: 0.015,
+                mergeSilenceDuration: 0.01
+            )
         )
 
-        let result = AudioAnalysisEngine.analyze(
-            samples: samples,
-            sampleRate: 1_000,
-            configuration: configuration
-        )
-
-        #expect(result.segments.count == 1)
-        #expect(abs(result.segments[0].startTime - 0.01) < 0.0001)
-        #expect(abs(result.segments[0].endTime - 0.05) < 0.0001)
-        #expect(result.waveform.count == 8)
+        #expect(segments.count == 1)
+        #expect(abs(segments[0].startTime - 0.01) < 0.0001)
+        #expect(abs(segments[0].endTime - 0.05) < 0.0001)
     }
 
     @Test
@@ -38,20 +34,18 @@ struct AudioAnalysisEngineTests {
             Array(repeating: Float(0), count: 10)
             + Array(repeating: Float(0.9), count: 4)
             + Array(repeating: Float(0), count: 20)
+        let envelope = RMSEnvelope.build(samples: samples, sampleRate: 1_000, windowDuration: 0.002)
 
-        let result = AudioAnalysisEngine.analyze(
-            samples: samples,
-            sampleRate: 1_000,
+        let segments = AudioAnalysisEngine.analyze(
+            envelope: envelope,
             configuration: AnalysisConfiguration(
                 threshold: 0.2,
                 minimumSoundDuration: 0.01,
-                mergeSilenceDuration: 0.01,
-                windowDuration: 0.002,
-                waveformBucketCount: 6
+                mergeSilenceDuration: 0.01
             )
         )
 
-        #expect(result.segments.isEmpty)
+        #expect(segments.isEmpty)
     }
 
     @Test

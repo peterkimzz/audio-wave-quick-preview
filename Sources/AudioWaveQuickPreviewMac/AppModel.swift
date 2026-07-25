@@ -28,6 +28,8 @@ final class AppModel: ObservableObject {
         }
     }
     @Published private(set) var exportProgress: Double?
+    /// Progress of the streaming analysis, or nil when no load is in flight.
+    @Published private(set) var loadProgress: Double?
     @Published private(set) var lastSavedPath: String?
     @Published var threshold: Double = 0.025
     @Published var minimumSoundDuration: Double = 0.12
@@ -39,12 +41,11 @@ final class AppModel: ObservableObject {
 
     private let playbackCoordinator = PlaybackCoordinator()
     private var document: AudioDocument?
-    private var waveformPyramid: WaveformPyramid?
-    private var waveformPyramidSourceURL: URL?
-    private var waveformCachePendingURL: URL?
     private var detectedSegments: [SoundSegment] = []
     private var playbackTimer: Timer?
-    private var waveformBuildTask: Task<Void, Never>?
+    /// URL of the load in flight, used to drop results from a superseded open.
+    private var loadingURL: URL?
+    private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
 
     init() {
@@ -71,7 +72,9 @@ final class AppModel: ObservableObject {
     }
 
     func handleInitialLaunch(arguments: [String] = CommandLine.arguments) {
-        guard document == nil else { return }
+        // `document` is only set once the async load finishes, so a second
+        // onAppear during loading must not restart it.
+        guard document == nil, loadingURL == nil else { return }
         guard let path = arguments.dropFirst().first else { return }
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
@@ -92,34 +95,87 @@ final class AppModel: ObservableObject {
     }
 
     func open(url: URL) {
+        loadTask?.cancel()
+        exportTask?.cancel()
+        stopPlaybackTimer()
+
+        document = nil
+        detectedSegments = []
+        waveform = []
+        minimapWaveform = []
+        viewport = nil
+        currentTime = 0
+        isPlaying = false
+        normalizeBaseDB = 0
+        offsetDB = 0
+        isBypassed = false
+        exportProgress = nil
+        lastSavedPath = nil
+        errorMessage = nil
+        fileName = url.lastPathComponent
+        loadingURL = url
+        loadProgress = 0
+
+        // Wire up the player first: it only parses the header, so playback is
+        // available while the waveform is still being analyzed.
         do {
-            let document = try AudioFileLoader.loadAudioDocument(from: url)
             try playbackCoordinator.load(url: url)
-            self.document = document
-            waveformPyramid = nil
-            waveformPyramidSourceURL = nil
-            waveformCachePendingURL = nil
-            waveformBuildTask?.cancel()
-            fileName = document.fileName
-            duration = document.duration
-            currentTime = 0
-            normalizeBaseDB = 0
-            offsetDB = 0
-            isBypassed = false
-            exportTask?.cancel()
-            exportProgress = nil
-            lastSavedPath = nil
-            applyPlaybackVolume()
+            duration = playbackCoordinator.duration
             viewport = WaveformViewport.full(
-                duration: document.duration,
+                duration: duration,
                 minimumVisibleDuration: minimumVisibleDuration
             )
-            errorMessage = nil
-            refreshAnalysis()
+            applyPlaybackVolume()
         } catch {
+            loadingURL = nil
+            loadProgress = nil
+            duration = 0
             errorMessage = error.localizedDescription
             statusMessage = "Unable to open the selected file."
+            return
         }
+
+        statusMessage = "Analyzing \(url.lastPathComponent)…"
+        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let model = self
+            do {
+                let document = try AudioFileLoader.loadAudioDocument(from: url) { progress in
+                    Task { @MainActor in model?.updateLoadProgress(progress, for: url) }
+                }
+                await MainActor.run { model?.adopt(document) }
+            } catch is CancellationError {
+                // A newer open() already reset the state it would have published.
+            } catch {
+                await MainActor.run { model?.failLoad(of: url, with: error) }
+            }
+        }
+    }
+
+    private func updateLoadProgress(_ progress: Double, for url: URL) {
+        guard loadingURL == url else { return }
+        loadProgress = progress
+    }
+
+    private func adopt(_ document: AudioDocument) {
+        guard loadingURL == document.url else { return }
+        loadingURL = nil
+        loadProgress = nil
+        self.document = document
+        fileName = document.fileName
+        duration = document.duration
+        viewport = WaveformViewport.full(
+            duration: document.duration,
+            minimumVisibleDuration: minimumVisibleDuration
+        )
+        refreshAnalysis()
+    }
+
+    private func failLoad(of url: URL, with error: Error) {
+        guard loadingURL == url else { return }
+        loadingURL = nil
+        loadProgress = nil
+        errorMessage = error.localizedDescription
+        statusMessage = "Unable to open the selected file."
     }
 
     func togglePlayback() {
@@ -339,38 +395,26 @@ final class AppModel: ObservableObject {
         guard let document else {
             waveform = []
             minimapWaveform = []
-            waveformPyramid = nil
-            waveformPyramidSourceURL = nil
-            waveformCachePendingURL = nil
-            statusMessage = "Open an audio file to inspect where sound is present."
+            if loadingURL == nil {
+                statusMessage = "Open an audio file to inspect where sound is present."
+            }
             return
         }
 
-        let result = AudioAnalysisEngine.analyze(
-            samples: document.samples,
-            sampleRate: document.sampleRate,
+        detectedSegments = AudioAnalysisEngine.analyze(
+            envelope: document.envelope,
             configuration: AnalysisConfiguration(
                 threshold: Float(threshold),
                 minimumSoundDuration: minimumSoundDuration,
-                mergeSilenceDuration: mergeSilenceDuration,
-                waveformBucketCount: Self.minimapWaveformBucketCount
+                mergeSilenceDuration: mergeSilenceDuration
             )
         )
+        statusMessage = makeStatusMessage(segments: detectedSegments, duration: document.duration)
 
-        detectedSegments = result.segments
-        statusMessage = makeStatusMessage(segments: result.segments, duration: document.duration)
-
-        if waveformPyramidSourceURL == document.url, waveformPyramid != nil {
-            updateVisiblePresentation()
-            return
-        }
-
-        minimapWaveform = result.waveform
-
-        if waveformCachePendingURL != document.url {
-            buildWaveformCache(for: document)
-        }
-
+        minimapWaveform = document.pyramid.samples(
+            for: .full(duration: document.duration, minimumVisibleDuration: minimumVisibleDuration),
+            targetBucketCount: Self.minimapWaveformBucketCount
+        )
         updateVisiblePresentation()
     }
 
@@ -434,59 +478,10 @@ final class AppModel: ObservableObject {
             )).updatingMinimumVisibleDuration(minimumVisibleDuration)
         self.viewport = viewport
 
-        if let waveformPyramid, waveformPyramidSourceURL == document.url {
-            waveform = waveformPyramid.samples(
-                for: viewport,
-                targetBucketCount: Self.mainWaveformBucketCount
-            )
-        } else {
-            waveform = makeVisibleWaveform(from: document, viewport: viewport)
-        }
-    }
-
-    private func makeVisibleWaveform(from document: AudioDocument, viewport: WaveformViewport) -> [Float] {
-        guard document.sampleRate > 0, !document.samples.isEmpty else { return [] }
-
-        let startIndex = max(Int((viewport.visibleStartTime * document.sampleRate).rounded(.down)), 0)
-        let endTime = min(viewport.visibleStartTime + viewport.visibleDuration, document.duration)
-        let endIndex = min(
-            max(Int((endTime * document.sampleRate).rounded(.up)), startIndex + 1),
-            document.samples.count
+        waveform = document.pyramid.samples(
+            for: viewport,
+            targetBucketCount: Self.mainWaveformBucketCount
         )
-
-        return WaveformDownsampler.downsample(
-            samples: document.samples[startIndex..<endIndex],
-            bucketCount: Self.mainWaveformBucketCount
-        )
-    }
-
-    private func buildWaveformCache(for document: AudioDocument) {
-        let documentURL = document.url
-        let samples = document.samples
-        let duration = document.duration
-        let minimumVisibleDuration = minimumVisibleDuration
-        let minimapBucketCount = Self.minimapWaveformBucketCount
-
-        waveformBuildTask?.cancel()
-        waveformCachePendingURL = documentURL
-
-        waveformBuildTask = Task.detached(priority: .userInitiated) {
-            let pyramid = WaveformPyramid.build(from: samples)
-            let fullViewport = WaveformViewport.full(
-                duration: duration,
-                minimumVisibleDuration: minimumVisibleDuration
-            )
-            let minimap = pyramid.samples(for: fullViewport, targetBucketCount: minimapBucketCount)
-
-            await MainActor.run {
-                guard self.document?.url == documentURL else { return }
-                self.waveformPyramid = pyramid
-                self.waveformPyramidSourceURL = documentURL
-                self.waveformCachePendingURL = nil
-                self.minimapWaveform = minimap
-                self.updateVisiblePresentation()
-            }
-        }
     }
 }
 

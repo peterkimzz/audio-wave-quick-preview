@@ -4,21 +4,15 @@ public struct AnalysisConfiguration: Sendable, Equatable {
     public var threshold: Float
     public var minimumSoundDuration: Double
     public var mergeSilenceDuration: Double
-    public var windowDuration: Double
-    public var waveformBucketCount: Int
 
     public init(
         threshold: Float,
         minimumSoundDuration: Double,
-        mergeSilenceDuration: Double,
-        windowDuration: Double = 0.01,
-        waveformBucketCount: Int = 600
+        mergeSilenceDuration: Double
     ) {
         self.threshold = threshold
         self.minimumSoundDuration = minimumSoundDuration
         self.mergeSilenceDuration = mergeSilenceDuration
-        self.windowDuration = windowDuration
-        self.waveformBucketCount = waveformBucketCount
     }
 }
 
@@ -32,39 +26,18 @@ public struct SoundSegment: Sendable, Equatable {
     }
 }
 
-public struct AudioAnalysisResult: Sendable, Equatable {
-    public let waveform: [Float]
-    public let segments: [SoundSegment]
-
-    public init(waveform: [Float], segments: [SoundSegment]) {
-        self.waveform = waveform
-        self.segments = segments
-    }
-}
-
 public enum AudioAnalysisEngine {
     public static func analyze(
-        samples: [Float],
-        sampleRate: Double,
+        envelope: RMSEnvelope,
         configuration: AnalysisConfiguration
-    ) -> AudioAnalysisResult {
-        guard !samples.isEmpty, sampleRate > 0 else {
-            return AudioAnalysisResult(waveform: [], segments: [])
-        }
+    ) -> [SoundSegment] {
+        guard !envelope.values.isEmpty, envelope.sampleRate > 0 else { return [] }
 
-        let windowSize = max(1, Int((configuration.windowDuration * sampleRate).rounded(.up)))
-        let windows = stride(from: 0, to: samples.count, by: windowSize).map { startIndex -> WindowEnergy in
-            let endIndex = min(startIndex + windowSize, samples.count)
-            let window = samples[startIndex..<endIndex]
-            let energy = sqrt(
-                window.reduce(0) { partialResult, sample in
-                    partialResult + (sample * sample)
-                } / Float(window.count))
-
-            return WindowEnergy(
-                startTime: Double(startIndex) / sampleRate,
-                endTime: Double(endIndex) / sampleRate,
-                rms: energy
+        let windows = envelope.values.enumerated().map { index, rms in
+            WindowEnergy(
+                startTime: envelope.startTime(ofWindow: index),
+                endTime: envelope.endTime(ofWindow: index),
+                rms: rms
             )
         }
 
@@ -72,13 +45,8 @@ public enum AudioAnalysisEngine {
         let filteredSegments = rawSegments.filter {
             ($0.endTime - $0.startTime) >= configuration.minimumSoundDuration
         }
-        let mergedSegments = merge(segments: filteredSegments, gapTolerance: configuration.mergeSilenceDuration)
-        let waveform = WaveformDownsampler.downsample(
-            samples: samples,
-            bucketCount: configuration.waveformBucketCount
-        )
 
-        return AudioAnalysisResult(waveform: waveform, segments: mergedSegments)
+        return merge(segments: filteredSegments, gapTolerance: configuration.mergeSilenceDuration)
     }
 
     private static func buildSegments(from windows: [WindowEnergy], threshold: Float) -> [SoundSegment] {
