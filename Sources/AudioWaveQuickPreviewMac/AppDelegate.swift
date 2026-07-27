@@ -2,17 +2,18 @@ import AppKit
 import AudioWaveQuickPreviewCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var onOpenFile: ((URL) -> Void)? {
+    var onOpenFiles: (([URL]) -> Void)? {
         didSet {
-            guard let pendingOpenURL, let onOpenFile else { return }
-            self.pendingOpenURL = nil
-            onOpenFile(pendingOpenURL)
+            guard !pendingOpenURLs.isEmpty, let onOpenFiles else { return }
+            let pending = pendingOpenURLs
+            pendingOpenURLs = []
+            onOpenFiles(pending)
         }
     }
     var onKeyboardAction: ((KeyboardShortcutAction) -> Void)?
     private var keyboardMonitor: Any?
-    /// Set when a file arrives before the handler is wired up.
-    private var pendingOpenURL: URL?
+    /// Set when files arrive before the handler is wired up.
+    private var pendingOpenURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure the app becomes a regular, activatable app even when launched as
@@ -51,14 +52,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard let firstURL = urls.first else { return }
+        guard !urls.isEmpty else { return }
         // The handler is wired in ContentView.onAppear, which can run after a
-        // Finder "Open With" delivers the file. Hold it rather than drop it.
-        guard let onOpenFile else {
-            pendingOpenURL = firstURL
+        // Finder "Open With" delivers the files. Hold them rather than drop them.
+        guard let onOpenFiles else {
+            pendingOpenURLs.append(contentsOf: urls)
             return
         }
-        onOpenFile(firstURL)
+        onOpenFiles(urls)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

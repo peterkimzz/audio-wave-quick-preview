@@ -18,3 +18,4 @@ identifier_name:
   excluded:
     - x   # pixel coordinate
     - db  # decibels
+    - id  # Identifiable's requirement — not renameable

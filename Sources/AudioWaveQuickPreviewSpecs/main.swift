@@ -297,8 +297,37 @@ struct AudioWaveQuickPreviewSpecs {
             try expectEqual(GainCalculations.snapOffset(-50), -12, accuracy: 0.001)
         }
 
+        run("a lane's zoom floor scales with the clip, so short effects stay zoomable") {
+            // A fixed 5 s floor would make these two unzoomable.
+            try expectEqual(laneMinimumVisibleDuration(for: 0.2), 0.05, accuracy: 0.0001)
+            try expectEqual(laneMinimumVisibleDuration(for: 8), 2, accuracy: 0.0001)
+            // Never zero, or WaveformViewport would divide by it.
+            try expectEqual(laneMinimumVisibleDuration(for: 0), 0.001, accuracy: 0.0001)
+        }
+
+        run("the minimap draws its viewport rect only once the lane is zoomed in") {
+            let full = WaveformViewport.full(duration: 8, minimumVisibleDuration: 2)
+            try expectEqual(drawsViewportRect(full) ? 1 : 0, 0, accuracy: 0.001)
+            try expectEqual(drawsViewportRect(full.zoomed(scale: 2, anchorRatio: 0.5)) ? 1 : 0, 1, accuracy: 0.001)
+            // Zooming back out past full view clamps to full, not past it.
+            try expectEqual(drawsViewportRect(full.zoomed(scale: 0.25, anchorRatio: 0.5)) ? 1 : 0, 0, accuracy: 0.001)
+        }
+
         print("All specs passed")
     }
+}
+
+/// Mirrors `Lane.minimumVisibleDuration` — the Mac target has no test target, so
+/// the rule is pinned here.
+private func laneMinimumVisibleDuration(for duration: Double) -> Double {
+    max(duration / 4, 0.001)
+}
+
+/// Mirrors the guard in `WaveformMinimapView.drawViewport`. The minimap itself is
+/// always visible (so lane height never shifts); only the highlight rect is
+/// conditional, because at full view it would cover the whole strip.
+private func drawsViewportRect(_ viewport: WaveformViewport) -> Bool {
+    viewport.totalDuration > 0 && viewport.visibleDuration < viewport.totalDuration
 }
 
 private func run(_ name: String, _ body: () throws -> Void) {
