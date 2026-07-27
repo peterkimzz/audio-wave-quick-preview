@@ -11,8 +11,11 @@ struct AudioWaveQuickPreviewMacApp: App {
         WindowGroup {
             let content = ContentView(model: model)
                 .onAppear {
-                    appDelegate.onOpenFile = model.open(url:)
+                    appDelegate.onOpenFiles = { model.add(urls: $0) }
                     appDelegate.onKeyboardAction = handleKeyboardAction(_:)
+                    #if DEBUG
+                        DebugSelfCheck.runIfRequested(model: model)
+                    #endif
                 }
             #if DEBUG
                 content.navigationTitle(Self.devWindowTitle)
@@ -34,11 +37,11 @@ struct AudioWaveQuickPreviewMacApp: App {
     private func handleKeyboardAction(_ action: KeyboardShortcutAction) {
         switch action {
         case .togglePlayback:
-            model.togglePlayback()
+            model.toggleActiveLanePlayback()
         case .seekBackward:
-            model.seekBackwardByKeyboardInterval()
+            model.seekActiveLaneBackward()
         case .seekForward:
-            model.seekForwardByKeyboardInterval()
+            model.seekActiveLaneForward()
         }
     }
 }

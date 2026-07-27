@@ -57,6 +57,10 @@ struct WaveformMinimapView: View {
 
     private func drawViewport(in context: inout GraphicsContext, size: CGSize) {
         guard let viewport, viewport.totalDuration > 0 else { return }
+        // At full view the rect would cover the whole strip, which reads as a
+        // selection rather than "you are already seeing everything". The minimap
+        // itself stays visible so the lane height never shifts.
+        guard viewport.visibleDuration < viewport.totalDuration else { return }
 
         let startX = size.width * (viewport.visibleStartTime / viewport.totalDuration)
         let width = max(size.width * (viewport.visibleDuration / viewport.totalDuration), 2)

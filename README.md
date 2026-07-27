@@ -5,12 +5,16 @@ Lightweight macOS audio inspection app for quickly previewing a file's waveform 
 ## Current v1 capabilities
 
 - Open `wav`, `mp3`, `m4a`, and `flac`
-- Play and pause the file
-- Toggle playback with the spacebar
-- Show a full-file waveform
-- Click anywhere on the waveform to jump playback
-- Drag across the waveform to scrub playback
-- Pinch to zoom and use horizontal trackpad scrolling to pan
+- File inspector sidebar: a persistent library of files, searchable, with
+  length / format / sample rate per row
+- Check files in the sidebar to stack them as lanes
+- Normalize every lane to a target loudness (RMS) in one press
+- Trim each lane by ±1 dB by ear, with a `CLIP` badge when it would clip
+- Audition any lane at its current gain
+- Export gain-adjusted copies of all lanes into a folder; originals untouched
+- Per-lane waveform: click to jump, drag to scrub, pinch to zoom, horizontal
+  scroll to pan. Every lane carries a minimap strip underneath; once the lane is
+  zoomed in, the strip highlights the visible span and can be dragged to move it
 
 ## Development
 
@@ -26,6 +30,15 @@ both auto-fix locally:
 
 ```bash
 swift format --in-place --recursive Sources Tests && swiftlint lint --fix
+```
+
+The app target has no unit-test target (it needs AppKit and a run loop), so the
+paths that write files or cross actors — batch export, per-lane analysis and
+normalize, the library round-trip through `UserDefaults` — are covered by a
+DEBUG-only self-check that runs as the app and exits non-zero on failure:
+
+```bash
+AWQP_SELF_CHECK=/path/to/a/folder/of/wavs swift run AudioWaveQuickPreviewMac
 ```
 
 ## Packaging and install

@@ -6,135 +6,195 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppModel: ObservableObject {
-    private static let minimapWaveformBucketCount = 700
-    private static let mainWaveformBucketCount = 720
+    private static let laneWaveformBucketCount = 360
+    private static let minimapWaveformBucketCount = 360
     private static let keyboardSeekInterval = 10.0
-    /// Zoom-in limit: the waveform never shows less than this much time.
-    private static let minimumVisibleDuration = 5.0
+    /// Preset targets from the mockup. Sound-effect work snaps to a handful of
+    /// house levels rather than sweeping a slider.
+    static let targetPresets = [-6.0, -14.0, -23.0]
 
-    @Published var fileName = "No audio selected"
-    @Published var waveform: [Float] = []
-    @Published var minimapWaveform: [Float] = []
-    @Published var duration: Double = 0
-    @Published var currentTime: Double = 0
-    @Published var isPlaying = false
-    /// Base gain set by Normalize to reach the loudness target (peak-limited).
-    @Published private(set) var normalizeBaseDB: Double = 0
-    /// Manual by-ear fine-tune added on top of the base.
-    @Published private(set) var offsetDB: Double = 0
-    @Published private(set) var isBypassed = false
-    @Published var targetLoudnessDBFS = GainCalculations.defaultTargetLoudnessDBFS {
+    // MARK: - Library (the file inspector)
+
+    @Published private(set) var entries: [LibraryEntry] = []
+    @Published var searchText = ""
+    /// URLs checked into lanes. Kept separate from `lanes` so a check survives
+    /// while the file is still being analyzed.
+    @Published private(set) var checked: Set<URL> = []
+
+    // MARK: - Lanes
+
+    @Published private(set) var lanes: [Lane] = []
+    @Published var targetLoudnessDBFS = GainCalculations.clampTarget(-14) {
         didSet {
             let clamped = GainCalculations.clampTarget(targetLoudnessDBFS)
-            if clamped != targetLoudnessDBFS { targetLoudnessDBFS = clamped }
+            if clamped != targetLoudnessDBFS {
+                targetLoudnessDBFS = clamped
+                return
+            }
+            // The base gains were computed for the old target, so they no longer
+            // describe what the lanes are set to.
+            if isNormalizeApplied { clearNormalize() }
         }
     }
+    @Published private(set) var isNormalizeApplied = false
+    /// The lane the player is loaded with. `AVAudioPlayer` gives one file at a
+    /// time, which matches the mockup's single `playing` slot. Being loaded is
+    /// not the same as sounding — see `isPlaying`.
+    @Published private(set) var playingURL: URL?
+    /// Whether that lane is actually sounding right now. Kept separate from
+    /// `playingURL`, which stays put across a pause or a play-through so the lane
+    /// keeps its playhead and highlight.
+    @Published private(set) var isPlaying = false
+    @Published private(set) var currentTime: Double = 0
     @Published private(set) var exportProgress: Double?
-    /// Progress of the streaming analysis, or nil when no load is in flight.
-    @Published private(set) var loadProgress: Double?
-    @Published private(set) var lastSavedPath: String?
-    @Published private(set) var viewport: WaveformViewport?
+    @Published private(set) var lastExportFolder: String?
     @Published var errorMessage: String?
 
     private let playbackCoordinator = PlaybackCoordinator()
-    private var document: AudioDocument?
     private var playbackTimer: Timer?
-    /// URL of the load in flight, used to drop results from a superseded open.
-    private var loadingURL: URL?
-    private var loadTask: Task<Void, Never>?
+    /// Analyzed files, kept after a lane is removed so re-checking is instant.
+    private var documentCache: [URL: AudioDocument] = [:]
+    private var loadTasks: [URL: Task<Void, Never>] = [:]
     private var exportTask: Task<Void, Never>?
 
     init() {
         playbackCoordinator.onStateChange = { [weak self] in
             self?.syncPlaybackState()
         }
+        restoreLibrary()
     }
 
-    // MARK: - Playhead
+    // MARK: - Library
 
-    /// Playhead position within the visible span, or nil when it is offscreen.
-    var playheadViewRatio: Double? {
-        viewport?.viewRatio(for: currentTime)
+    var filteredEntries: [LibraryEntry] {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return entries }
+        return entries.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
-    var playheadOffscreenDirection: OffscreenIndicatorDirection? {
-        viewport?.offscreenIndicatorDirection(for: currentTime)
+    var selectionSummary: String {
+        "\(checked.count) of \(entries.count) selected"
     }
 
-    /// Playhead position across the whole file, for the minimap.
-    var playheadGlobalRatio: Double? {
-        guard let viewport, viewport.totalDuration > 0 else { return nil }
-        return min(max(currentTime / viewport.totalDuration, 0), 1)
+    var areAllChecked: Bool {
+        !entries.isEmpty && checked.count == entries.count
     }
 
-    func handleInitialLaunch(arguments: [String] = CommandLine.arguments) {
-        // `document` is only set once the async load finishes, so a second
-        // onAppear during loading must not restart it.
-        guard document == nil, loadingURL == nil else { return }
-        guard let path = arguments.dropFirst().first else { return }
-        let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        open(url: url)
+    private func restoreLibrary() {
+        let urls = LibraryStore.loadPaths()
+        guard !urls.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            // Files can vanish between runs; a missing one is dropped silently
+            // rather than greeting the user with an error on every launch.
+            let restored = urls.compactMap { try? LibraryEntry.read($0) }
+            await MainActor.run { self?.adoptRestored(restored) }
+        }
+    }
+
+    /// Merges rather than assigns. This read is slow enough (a header parse per
+    /// file) that `handleInitialLaunch` and Finder's "Open With" routinely land
+    /// first; assigning would drop the file the user actually launched with,
+    /// leaving it as a lane with no sidebar row, and shrink the persisted library
+    /// to just that file on the next mutation.
+    private func adoptRestored(_ restored: [LibraryEntry]) {
+        entries = LibraryEntry.merged(restored: restored, with: entries)
+        LibraryStore.save(entries.map(\.url))
     }
 
     func openFilePanel() {
         let panel = NSOpenPanel()
-        panel.title = "Choose an audio file"
-        panel.prompt = "Open"
-        panel.allowsMultipleSelection = false
+        panel.title = "Add audio to the library"
+        panel.prompt = "Add"
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = SupportedTypes.allowedTypes
 
-        if panel.runModal() == .OK, let url = panel.url {
-            open(url: url)
+        if panel.runModal() == .OK {
+            add(urls: panel.urls)
         }
     }
 
-    func open(url: URL) {
-        loadTask?.cancel()
-        exportTask?.cancel()
-        // Before anything else, so a file that fails to decode cannot leave the
-        // previous one playing with the transport already reset out from under
-        // it. The space-bar monitor bypasses the disabled buttons, so a stale
-        // player would still be reachable.
-        playbackCoordinator.unload()
-        stopPlaybackTimer()
+    /// Adds files to the library without disturbing what is already staged.
+    /// Newly added files are checked, so a drop lands straight in a lane.
+    func add(urls: [URL]) {
+        let known = Set(entries.map(\.url))
+        var added: [LibraryEntry] = []
 
-        document = nil
-        waveform = []
-        minimapWaveform = []
-        viewport = nil
-        currentTime = 0
-        isPlaying = false
-        normalizeBaseDB = 0
-        offsetDB = 0
-        isBypassed = false
-        exportProgress = nil
-        lastSavedPath = nil
-        errorMessage = nil
-        fileName = url.lastPathComponent
-        loadingURL = url
-        loadProgress = 0
+        for url in urls where !known.contains(url) {
+            guard SupportedTypes.isSupported(url) else { continue }
+            do {
+                added.append(try LibraryEntry.read(url))
+            } catch {
+                errorMessage = "\(url.lastPathComponent): \(error.localizedDescription)"
+            }
+        }
 
-        // Wire up the player first: it only parses the header, so playback is
-        // available while the waveform is still being analyzed.
-        do {
-            try playbackCoordinator.load(url: url)
-            duration = playbackCoordinator.duration
-            viewport = WaveformViewport.full(
-                duration: duration,
-                minimumVisibleDuration: Self.minimumVisibleDuration
-            )
-            applyPlaybackVolume()
-        } catch {
-            loadingURL = nil
-            loadProgress = nil
-            duration = 0
-            errorMessage = error.localizedDescription
+        guard !added.isEmpty else { return }
+        entries.append(contentsOf: added)
+        LibraryStore.save(entries.map(\.url))
+        for entry in added { check(entry.url) }
+    }
+
+    func remove(url: URL) {
+        entries.removeAll { $0.url == url }
+        LibraryStore.save(entries.map(\.url))
+        uncheck(url)
+        documentCache[url] = nil
+    }
+
+    func handleInitialLaunch(arguments: [String] = CommandLine.arguments) {
+        let urls = arguments.dropFirst()
+            .map { URL(fileURLWithPath: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !urls.isEmpty else { return }
+        add(urls: urls)
+    }
+
+    // MARK: - Checking files into lanes
+
+    func toggle(_ url: URL) {
+        if checked.contains(url) {
+            uncheck(url)
+        } else {
+            check(url)
+        }
+    }
+
+    func toggleSelectAll() {
+        if areAllChecked {
+            for url in entries.map(\.url) { uncheck(url) }
+        } else {
+            for url in entries.map(\.url) { check(url) }
+        }
+    }
+
+    private func check(_ url: URL) {
+        guard !checked.contains(url), let entry = entries.first(where: { $0.url == url }) else { return }
+        checked.insert(url)
+
+        var lane = Lane(entry: entry)
+        if let cached = documentCache[url] {
+            adopt(cached, into: &lane)
+            lanes.append(lane)
             return
         }
 
-        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+        lane.loadProgress = 0
+        lanes.append(lane)
+        startAnalysis(of: url)
+    }
+
+    private func uncheck(_ url: URL) {
+        checked.remove(url)
+        lanes.removeAll { $0.url == url }
+        loadTasks[url]?.cancel()
+        loadTasks[url] = nil
+        if playingURL == url { stopPlayback() }
+    }
+
+    private func startAnalysis(of url: URL) {
+        loadTasks[url]?.cancel()
+        loadTasks[url] = Task.detached(priority: .userInitiated) { [weak self] in
             let model = self
             do {
                 let document = try AudioFileLoader.loadAudioDocument(from: url) { progress in
@@ -142,7 +202,7 @@ final class AppModel: ObservableObject {
                 }
                 await MainActor.run { model?.adopt(document) }
             } catch is CancellationError {
-                // A newer open() already reset the state it would have published.
+                // The lane was unchecked; its state is already gone.
             } catch {
                 await MainActor.run { model?.failLoad(of: url, with: error) }
             }
@@ -150,260 +210,193 @@ final class AppModel: ObservableObject {
     }
 
     private func updateLoadProgress(_ progress: Double, for url: URL) {
-        guard loadingURL == url else { return }
-        loadProgress = progress
+        guard let index = lanes.firstIndex(where: { $0.url == url }) else { return }
+        lanes[index].loadProgress = progress
     }
 
     private func adopt(_ document: AudioDocument) {
-        guard loadingURL == document.url else { return }
-        loadingURL = nil
-        loadProgress = nil
-        self.document = document
-        fileName = document.fileName
-        duration = document.duration
-        viewport = WaveformViewport.full(
-            duration: document.duration,
-            minimumVisibleDuration: Self.minimumVisibleDuration
+        documentCache[document.url] = document
+        loadTasks[document.url] = nil
+        guard let index = lanes.firstIndex(where: { $0.url == document.url }) else { return }
+        adopt(document, into: &lanes[index])
+        if isNormalizeApplied { applyNormalize(to: &lanes[index]) }
+    }
+
+    private func adopt(_ document: AudioDocument, into lane: inout Lane) {
+        let minimum = Lane.minimumVisibleDuration(for: document.duration)
+        lane.document = document
+        lane.loadProgress = nil
+        lane.viewport = .full(duration: document.duration, minimumVisibleDuration: minimum)
+        lane.minimapWaveform = document.pyramid.samples(
+            for: .full(duration: document.duration, minimumVisibleDuration: minimum),
+            targetBucketCount: Self.minimapWaveformBucketCount
         )
-        refreshWaveform()
+        refreshWaveform(of: &lane)
     }
 
     private func failLoad(of url: URL, with error: Error) {
-        guard loadingURL == url else { return }
-        loadingURL = nil
-        loadProgress = nil
-        errorMessage = error.localizedDescription
+        loadTasks[url] = nil
+        guard let index = lanes.firstIndex(where: { $0.url == url }) else { return }
+        lanes[index].loadProgress = nil
+        errorMessage = "\(url.lastPathComponent): \(error.localizedDescription)"
     }
 
-    func togglePlayback() {
-        playbackCoordinator.playPause()
-    }
-
-    // MARK: - Gain
-
-    var hasDocument: Bool { document != nil }
-
-    /// Effective gain applied everywhere = Normalize base + fine-tune offset,
-    /// snapped and clamped to the valid dB range.
-    var gainDB: Double { GainCalculations.snap(normalizeBaseDB + offsetDB) }
-
-    /// Display scale for the waveform (reflects the save gain, ignores bypass).
-    var waveformGainScale: Float {
-        Float(GainCalculations.linearScale(forDB: gainDB))
-    }
-
-    var estimatedPeakDBFS: Double {
-        GainCalculations.estimatedPeakDBFS(originalPeak: document?.peak ?? 0, gainDB: gainDB)
-    }
-
-    /// Estimated perceived loudness (RMS) after the current gain, in dBFS.
-    var estimatedLoudnessDBFS: Double {
-        guard let document else { return -.infinity }
-        return GainCalculations.dBFS(document.rms) + gainDB
-    }
-
-    var isClipping: Bool {
-        // Attenuation or unity can't introduce clipping, so an already-hot source
-        // (peak ≥ ceiling) is still saveable at 0 dB or below — only a positive
-        // gain that pushes the peak past the ceiling blocks Save.
-        guard let document, gainDB > 0 else { return false }
-        return GainCalculations.isClipping(originalPeak: document.peak, gainDB: gainDB)
-    }
-
-    /// True when the peak ceiling puts the loudness target out of reach, so
-    /// Normalize can't get there. Derived from the file and the target rather
-    /// than from `normalizeBaseDB`, which would miss a file whose safe gain is
-    /// exactly 0 dB — the most peak-limited case there is.
-    var isPeakLimited: Bool {
-        guard let document else { return false }
-        return GainCalculations.isPeakLimited(
-            currentRMS: document.rms,
-            originalPeak: document.peak,
-            targetDBFS: targetLoudnessDBFS
-        )
-    }
-
-    var maxSafeGainDB: Double {
-        GainCalculations.maxSafeGainDB(originalPeak: document?.peak ?? 0)
-    }
-
-    var canSave: Bool { hasDocument && !isClipping && exportProgress == nil }
-
-    /// Manual by-ear fine-tune, layered on top of the Normalize base.
-    func setOffset(_ db: Double) {
-        offsetDB = GainCalculations.snapOffset(db)
-        lastSavedPath = nil
-        applyPlaybackVolume()
-    }
-
-    /// "0 dB Reset" — back to the original level (clears base and offset).
-    func resetGain() {
-        normalizeBaseDB = 0
-        offsetDB = 0
-        lastSavedPath = nil
-        applyPlaybackVolume()
-    }
-
-    /// Sets the base gain so the file's RMS lands on `targetLoudnessDBFS`, capped
-    /// so the peak never clips. The fine-tune offset is left untouched.
-    func normalizeToTarget() {
-        guard let document else { return }
-        normalizeBaseDB = GainCalculations.gainForTargetLoudness(
-            currentRMS: document.rms,
-            originalPeak: document.peak,
-            targetDBFS: targetLoudnessDBFS
-        )
-        lastSavedPath = nil
-        applyPlaybackVolume()
-    }
-
-    func toggleBypass() {
-        isBypassed.toggle()
-        applyPlaybackVolume()
-    }
-
-    private func applyPlaybackVolume() {
-        // AVAudioPlayer volume can't exceed unity, so a boost would make the
-        // gained and bypassed sides both play at 1.0 (Bypass becomes inaudible).
-        // Keep the relative difference audible by attenuating whichever side
-        // would exceed 1.0 instead.
-        let scale = GainCalculations.linearScale(forDB: gainDB)
-        playbackCoordinator.setVolume(Float(isBypassed ? min(1 / scale, 1) : min(scale, 1)))
-    }
-
-    func saveAs() {
-        guard let document, canSave else { return }
-
-        let panel = NSSavePanel()
-        panel.title = "Save gain-adjusted WAV"
-        panel.nameFieldStringValue = GainCalculations.outputFileName(
-            originalName: document.fileName,
-            gainDB: gainDB
-        )
-        panel.allowedContentTypes = [.wav]
-
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
-        startExport(source: document.url, destination: destination, gainDB: gainDB)
-    }
-
-    func cancelExport() {
-        exportTask?.cancel()
-    }
-
-    private func startExport(source: URL, destination: URL, gainDB: Double) {
-        errorMessage = nil
-        exportProgress = 0
-        exportTask?.cancel()
-        exportTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let model = self
-            do {
-                try AudioExportService.export(
-                    source: source,
-                    destination: destination,
-                    gainDB: gainDB
-                ) { progress in
-                    Task { @MainActor in model?.exportProgress = progress }
-                }
-                await MainActor.run {
-                    model?.exportProgress = nil
-                    model?.lastSavedPath = destination.path
-                }
-            } catch is CancellationError {
-                await MainActor.run {
-                    model?.exportProgress = nil
-                }
-            } catch {
-                await MainActor.run {
-                    model?.exportProgress = nil
-                    model?.errorMessage = error.localizedDescription
-                }
-            }
+    private func refreshWaveform(of lane: inout Lane) {
+        guard let document = lane.document, let viewport = lane.viewport else {
+            lane.waveform = []
+            return
         }
+        lane.waveform = document.pyramid.samples(
+            for: viewport,
+            targetBucketCount: Self.laneWaveformBucketCount
+        )
     }
 
-    func seek(to ratio: Double) {
-        let time: Double
-        if let viewport {
-            time = viewport.time(forViewRatio: ratio)
+    // MARK: - Normalize
+
+    func toggleNormalize() {
+        if isNormalizeApplied {
+            clearNormalize()
         } else {
-            let clampedRatio = min(max(ratio, 0), 1)
-            time = clampedRatio * duration
+            for index in lanes.indices { applyNormalize(to: &lanes[index]) }
+            isNormalizeApplied = true
+            applyPlaybackVolume()
         }
-
-        playbackCoordinator.seek(to: time)
-        currentTime = time
     }
 
-    func seekByKeyboardOffset(_ delta: Double) {
-        let time = PlaybackNavigation.shiftedTime(
-            currentTime: currentTime,
-            duration: duration,
-            delta: delta
+    /// Sets the base gain so the lane's RMS lands on the target, capped so the
+    /// peak never clips. The by-ear ± trim is left alone.
+    private func applyNormalize(to lane: inout Lane) {
+        guard let document = lane.document else { return }
+        lane.normalizeBaseDB = GainCalculations.gainForTargetLoudness(
+            currentRMS: document.rms,
+            originalPeak: document.peak,
+            targetDBFS: targetLoudnessDBFS
         )
-        playbackCoordinator.seek(to: time)
-        currentTime = time
     }
 
-    func seekBackwardByKeyboardInterval() {
-        seekByKeyboardOffset(-Self.keyboardSeekInterval)
+    private func clearNormalize() {
+        for index in lanes.indices { lanes[index].normalizeBaseDB = 0 }
+        isNormalizeApplied = false
+        applyPlaybackVolume()
     }
 
-    func seekForwardByKeyboardInterval() {
-        seekByKeyboardOffset(Self.keyboardSeekInterval)
+    /// One stepper press: ±1 dB, snapped and clamped by `GainCalculations`.
+    func nudge(_ url: URL, by delta: Double) {
+        guard let index = lanes.firstIndex(where: { $0.url == url }) else { return }
+        lanes[index] = lanes[index].nudged(by: delta)
+        lastExportFolder = nil
+        applyPlaybackVolume()
     }
 
-    func zoomWaveform(scale: Double, anchorRatio: Double) {
-        guard let viewport else { return }
-        self.viewport = viewport.zoomed(scale: scale, anchorRatio: anchorRatio)
-        updateVisiblePresentation()
+    func resetGain(_ url: URL) {
+        guard let index = lanes.firstIndex(where: { $0.url == url }) else { return }
+        lanes[index].normalizeBaseDB = 0
+        lanes[index].offsetDB = 0
+        applyPlaybackVolume()
     }
 
-    func panWaveform(byViewRatio deltaRatio: Double) {
-        guard let viewport else { return }
-        let deltaTime = viewport.visibleDuration * deltaRatio
-        self.viewport = viewport.panned(by: deltaTime)
-        updateVisiblePresentation()
+    var clippingLaneCount: Int {
+        lanes.filter(\.isClipping).count
     }
 
-    func resetZoom() {
-        guard let viewport else { return }
-        self.viewport = viewport.reset()
-        updateVisiblePresentation()
+    var statusSummary: String {
+        let state = isNormalizeApplied ? "normalized" : "original levels"
+        return "\(lanes.count) lanes · \(state)"
     }
 
-    func centerOnPlayhead() {
-        guard let viewport else { return }
-        self.viewport = viewport.centeredOnTime(currentTime)
-        updateVisiblePresentation()
+    var targetSummary: String {
+        String(format: "target %.1f dBFS · RMS", targetLoudnessDBFS)
     }
 
-    func jumpViewport(toGlobalRatio ratio: Double) {
-        guard let viewport else { return }
-        self.viewport = viewport.centeredOnGlobalRatio(ratio)
-        updateVisiblePresentation()
-    }
+    // MARK: - Audition
 
-    func refreshWaveform() {
-        guard let document else {
-            waveform = []
-            minimapWaveform = []
+    func audition(_ url: URL) {
+        if playingURL == url {
+            // A file played to the end leaves the player parked at its duration,
+            // where play() would finish again instantly. Rewind before resuming.
+            if !playbackCoordinator.isPlaying, didReachEnd {
+                playbackCoordinator.seek(to: 0)
+            }
+            playbackCoordinator.playPause()
             return
         }
 
-        minimapWaveform = document.pyramid.samples(
-            for: .full(duration: document.duration, minimumVisibleDuration: Self.minimumVisibleDuration),
-            targetBucketCount: Self.minimapWaveformBucketCount
-        )
-        updateVisiblePresentation()
+        startPlayback(of: url)
     }
 
-    /// Mirrors the player onto the published state. Assigning unconditionally
-    /// would fire `objectWillChange` 40×/second even while paused, which redraws
-    /// the entire view tree for nothing — hence the equality guards.
+    private var didReachEnd: Bool {
+        playbackCoordinator.duration > 0
+            && playbackCoordinator.currentTime >= playbackCoordinator.duration - 0.05
+    }
+
+    private func startPlayback(of url: URL) {
+        playbackCoordinator.unload()
+        do {
+            try playbackCoordinator.load(url: url)
+            playingURL = url
+            currentTime = 0
+            applyPlaybackVolume()
+            playbackCoordinator.playPause()
+        } catch {
+            playingURL = nil
+            errorMessage = "\(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    private func stopPlayback() {
+        playbackCoordinator.unload()
+        playingURL = nil
+        isPlaying = false
+        currentTime = 0
+        stopPlaybackTimer()
+    }
+
+    /// The lane the keyboard acts on: whatever is playing, else the top lane.
+    var activeLaneURL: URL? {
+        playingURL ?? lanes.first?.url
+    }
+
+    func toggleActiveLanePlayback() {
+        guard let url = activeLaneURL else { return }
+        audition(url)
+    }
+
+    func playheadRatio(for lane: Lane) -> Double? {
+        guard playingURL == lane.url, let viewport = lane.viewport else { return nil }
+        return viewport.viewRatio(for: currentTime)
+    }
+
+    func playheadOffscreenDirection(for lane: Lane) -> OffscreenIndicatorDirection? {
+        guard playingURL == lane.url else { return nil }
+        return lane.viewport?.offscreenIndicatorDirection(for: currentTime)
+    }
+
+    func playheadGlobalRatio(for lane: Lane) -> Double? {
+        guard playingURL == lane.url, lane.duration > 0 else { return nil }
+        return min(max(currentTime / lane.duration, 0), 1)
+    }
+
+    private func applyPlaybackVolume() {
+        guard let playingURL, let lane = lanes.first(where: { $0.url == playingURL }) else { return }
+        // AVAudioPlayer cannot exceed unity, so a boost is expressed by attenuating
+        // nothing rather than amplifying — the relative differences between lanes
+        // still come through.
+        let scale = GainCalculations.linearScale(forDB: lane.gainDB)
+        playbackCoordinator.setVolume(Float(min(scale, 1)))
+    }
+
+    // MARK: - Playback plumbing
+
+    /// Mirrors the player onto published state. Unconditional assignment would
+    /// fire `objectWillChange` 20×/second while paused, redrawing every lane.
     private func syncPlaybackState() {
         let time = playbackCoordinator.currentTime
         if currentTime != time { currentTime = time }
 
+        // The one place `isPlaying` is written. Both a pause and a file running to
+        // its end arrive here — via `playPause()` and the player's finish delegate
+        // respectively — so neither can leave the lane stuck showing a pause icon.
         let playing = playbackCoordinator.isPlaying
         if isPlaying != playing { isPlaying = playing }
 
@@ -417,7 +410,7 @@ final class AppModel: ObservableObject {
     private func startPlaybackTimer() {
         guard playbackTimer == nil else { return }
         // Scheduled on the main run loop, so the tick is already main-actor
-        // isolated — no need to hop through a Task per tick.
+        // isolated — no Task hop per tick.
         playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.syncPlaybackState()
@@ -430,30 +423,150 @@ final class AppModel: ObservableObject {
         playbackTimer = nil
     }
 
-    private func updateVisiblePresentation() {
-        guard let document else {
-            waveform = []
-            minimapWaveform = []
+    // MARK: - Viewport
+
+    func seek(_ url: URL, toViewRatio ratio: Double) {
+        guard let lane = lanes.first(where: { $0.url == url }) else { return }
+        let time = lane.viewport?.time(forViewRatio: ratio) ?? (min(max(ratio, 0), 1) * lane.duration)
+        // Seeking a lane that is not the audible one would move the wrong player.
+        if playingURL != url { startPlayback(of: url) }
+        playbackCoordinator.seek(to: time)
+        currentTime = time
+    }
+
+    func seekActiveLane(by delta: Double) {
+        guard let url = activeLaneURL, let lane = lanes.first(where: { $0.url == url }) else { return }
+        if playingURL != url { startPlayback(of: url) }
+        let time = PlaybackNavigation.shiftedTime(
+            currentTime: currentTime,
+            duration: lane.duration,
+            delta: delta
+        )
+        playbackCoordinator.seek(to: time)
+        currentTime = time
+    }
+
+    func seekActiveLaneBackward() { seekActiveLane(by: -Self.keyboardSeekInterval) }
+    func seekActiveLaneForward() { seekActiveLane(by: Self.keyboardSeekInterval) }
+
+    func zoom(_ url: URL, scale: Double, anchorRatio: Double) {
+        updateViewport(of: url) { $0.zoomed(scale: scale, anchorRatio: anchorRatio) }
+    }
+
+    func pan(_ url: URL, byViewRatio deltaRatio: Double) {
+        updateViewport(of: url) { $0.panned(by: $0.visibleDuration * deltaRatio) }
+    }
+
+    func resetZoom(_ url: URL) {
+        updateViewport(of: url) { $0.reset() }
+    }
+
+    func jumpViewport(_ url: URL, toGlobalRatio ratio: Double) {
+        updateViewport(of: url) { $0.centeredOnGlobalRatio(ratio) }
+    }
+
+    private func updateViewport(of url: URL, _ transform: (WaveformViewport) -> WaveformViewport) {
+        guard let index = lanes.firstIndex(where: { $0.url == url }),
+            let viewport = lanes[index].viewport
+        else {
+            return
+        }
+        lanes[index].viewport = transform(viewport)
+        refreshWaveform(of: &lanes[index])
+    }
+
+    // MARK: - Batch export
+
+    var canExport: Bool {
+        !lanes.isEmpty && lanes.allSatisfy { $0.document != nil } && exportProgress == nil
+    }
+
+    var exportLabel: String {
+        "Export \(lanes.count) Copies…"
+    }
+
+    func exportLanes() {
+        guard canExport else { return }
+        let clipping = lanes.filter(\.isClipping)
+        guard clipping.isEmpty else {
+            errorMessage =
+                "Too loud to export: \(clipping.map(\.name).joined(separator: ", ")). Lower the gain."
             return
         }
 
-        let viewport =
-            (self.viewport
-            ?? .full(
-                duration: document.duration,
-                minimumVisibleDuration: Self.minimumVisibleDuration
-            )).updatingMinimumVisibleDuration(Self.minimumVisibleDuration)
-        self.viewport = viewport
+        let panel = NSOpenPanel()
+        panel.title = "Choose a destination folder"
+        panel.prompt = "Export"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
 
-        waveform = document.pyramid.samples(
-            for: viewport,
-            targetBucketCount: Self.mainWaveformBucketCount
-        )
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        startExport(to: folder)
+    }
+
+    func cancelExport() {
+        exportTask?.cancel()
+    }
+
+    /// Split from `exportLanes()` so the destination can be supplied without a
+    /// panel — `NSOpenPanel` cannot run in a headless self-check.
+    func startExport(to folder: URL) {
+        // Snapshot the jobs: the lanes can be re-checked or nudged mid-export, and
+        // the running export must keep writing what the user actually confirmed.
+        let jobs = lanes.map { lane in
+            (
+                source: lane.url,
+                destination: folder.appendingPathComponent(
+                    GainCalculations.outputFileName(originalName: lane.name, gainDB: lane.gainDB)
+                ),
+                gainDB: lane.gainDB
+            )
+        }
+
+        errorMessage = nil
+        lastExportFolder = nil
+        exportProgress = 0
+        exportTask?.cancel()
+        exportTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let model = self
+            let total = Double(jobs.count)
+            do {
+                for (index, job) in jobs.enumerated() {
+                    try Task.checkCancellation()
+                    try AudioExportService.export(
+                        source: job.source,
+                        destination: job.destination,
+                        gainDB: job.gainDB
+                    ) { fileProgress in
+                        let overall = (Double(index) + fileProgress) / total
+                        Task { @MainActor in model?.exportProgress = overall }
+                    }
+                }
+                await MainActor.run {
+                    model?.exportProgress = nil
+                    model?.lastExportFolder = folder.path
+                }
+            } catch is CancellationError {
+                await MainActor.run { model?.exportProgress = nil }
+            } catch {
+                await MainActor.run {
+                    model?.exportProgress = nil
+                    model?.errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 }
 
-private enum SupportedTypes {
-    static let allowedTypes = ["wav", "mp3", "m4a", "flac"].compactMap {
+enum SupportedTypes {
+    static let extensions = ["wav", "mp3", "m4a", "flac"]
+
+    static let allowedTypes = extensions.compactMap {
         UTType(filenameExtension: $0)
+    }
+
+    static func isSupported(_ url: URL) -> Bool {
+        extensions.contains(url.pathExtension.lowercased())
     }
 }
