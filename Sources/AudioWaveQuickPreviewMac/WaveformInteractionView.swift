@@ -1,4 +1,5 @@
 import AppKit
+import AudioWaveQuickPreviewCore
 import SwiftUI
 
 struct WaveformInteractionView: NSViewRepresentable {
@@ -27,6 +28,7 @@ struct WaveformInteractionView: NSViewRepresentable {
 
 final class InteractionNSView: NSView {
     weak var coordinator: WaveformInteractionView.Coordinator?
+    private var scrollAxis = ScrollAxisLatch()
     private lazy var magnificationRecognizer = NSMagnificationGestureRecognizer(
         target: self,
         action: #selector(handleMagnification(_:))
@@ -44,13 +46,28 @@ final class InteractionNSView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard bounds.width > 0, abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else {
+        let isHorizontal = scrollAxis.isHorizontal(
+            deltaX: Double(event.scrollingDeltaX),
+            deltaY: Double(event.scrollingDeltaY),
+            phase: Self.latchPhase(for: event)
+        )
+
+        guard bounds.width > 0, isHorizontal else {
             super.scrollWheel(with: event)
             return
         }
 
         let deltaRatio = Double((-event.scrollingDeltaX) / bounds.width)
         coordinator?.onHorizontalScroll(deltaRatio)
+    }
+
+    /// A momentum event arrives after the gesture's `.ended` with an empty `phase`
+    /// but a set `momentumPhase`: it is the tail of the fling that already picked
+    /// an axis, so it continues that decision rather than making a new one. An
+    /// event with neither is a plain wheel click, which stands alone.
+    private static func latchPhase(for event: NSEvent) -> ScrollAxisLatch.Phase {
+        let insideGesture = !event.phase.isEmpty || !event.momentumPhase.isEmpty
+        return insideGesture && event.phase != .began ? .continues : .begins
     }
 
     override func mouseDown(with event: NSEvent) {

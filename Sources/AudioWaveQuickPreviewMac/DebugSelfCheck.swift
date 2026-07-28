@@ -2,6 +2,7 @@
     import AVFoundation
     import AppKit
     import AudioWaveQuickPreviewCore
+    import Combine
     import SwiftUI
 
     /// Headless self-check for the paths that write files or cross actors, which
@@ -174,6 +175,33 @@
             try expect(
                 model.lanes.contains { $0.url == recheckURL && $0.document != nil },
                 "re-checking should reuse the cached analysis, not re-analyze")
+
+            // --- viewport: a no-op pan must not republish ---
+            // A vertical trackpad scroll drifts sideways, and each leaked pan used to
+            // redownsample and redraw every lane — even at full view, where panning
+            // clamps to nothing. That was the scroll stutter.
+            let panTarget = model.lanes[0].url
+            var republishCount = 0
+            let observer = model.objectWillChange.sink { _ in republishCount += 1 }
+            model.pan(panTarget, byViewRatio: 0.1)
+            model.pan(panTarget, byViewRatio: -0.1)
+            try expect(
+                republishCount == 0,
+                "panning a lane at full view republished the lanes \(republishCount) time(s)")
+            observer.cancel()
+
+            // A real zoom still lands, and panning inside it still moves.
+            model.zoom(panTarget, scale: 4, anchorRatio: 0.5)
+            let zoomed = model.lanes[0].viewport!
+            try expect(zoomed.visibleDuration < zoomed.totalDuration, "pinch did not zoom in")
+            model.pan(panTarget, byViewRatio: 0.25)
+            try expect(
+                model.lanes[0].viewport!.visibleStartTime > zoomed.visibleStartTime,
+                "panning a zoomed lane did not move the visible span")
+            model.resetZoom(panTarget)
+            try expect(
+                model.lanes[0].viewport!.visibleDuration == zoomed.totalDuration,
+                "double-click did not reset the zoom")
 
             // --- playback state reaches the UI ---
             // Both regressions here were the same root cause: `playingURL` means

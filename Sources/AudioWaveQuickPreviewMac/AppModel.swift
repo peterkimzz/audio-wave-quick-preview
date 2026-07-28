@@ -471,7 +471,12 @@ final class AppModel: ObservableObject {
         else {
             return
         }
-        lanes[index].viewport = transform(viewport)
+        // A pan at full view clamps back to the same viewport, as does a pinch at
+        // the zoom limit. Assigning anyway would republish `lanes` and redraw every
+        // lane for nothing — the expensive half of the old scroll stutter.
+        let updated = transform(viewport)
+        guard updated != viewport else { return }
+        lanes[index].viewport = updated
         refreshWaveform(of: &lanes[index])
     }
 
