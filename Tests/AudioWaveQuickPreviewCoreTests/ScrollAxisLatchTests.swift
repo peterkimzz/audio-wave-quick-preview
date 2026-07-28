@@ -21,10 +21,10 @@ struct ScrollAxisLatchTests {
     func keepsAVerticalGestureVerticalDespiteSidewaysDrift() {
         var gesture = ScrollGesture()
 
-        let start = gesture.send(deltaX: 0.4, deltaY: -12, .began)
+        let start = gesture.send(deltaX: 0.4, deltaY: -12, .begins)
         // Mid-scroll drift, and the tail of a fling where vertical decays first.
-        let drift = gesture.send(deltaX: 3, deltaY: -2, .changed)
-        let tail = gesture.send(deltaX: 0.9, deltaY: -0.1, .changed)
+        let drift = gesture.send(deltaX: 3, deltaY: -2, .continues)
+        let tail = gesture.send(deltaX: 0.9, deltaY: -0.1, .continues)
 
         #expect([start, drift, tail] == [false, false, false])
     }
@@ -33,29 +33,48 @@ struct ScrollAxisLatchTests {
     func aHorizontalGestureStaysHorizontalThroughVerticalDrift() {
         var gesture = ScrollGesture()
 
-        let start = gesture.send(deltaX: -14, deltaY: 0.6, .began)
-        let drift = gesture.send(deltaX: -1, deltaY: 2, .changed)
+        let start = gesture.send(deltaX: -14, deltaY: 0.6, .begins)
+        let drift = gesture.send(deltaX: -1, deltaY: 2, .continues)
 
         #expect([start, drift] == [true, true])
     }
 
+    /// Momentum coasts on under the gesture's latch. It used to be judged event by
+    /// event, which put the sideways leak right back into every vertical fling.
     @Test
-    func theNextGestureIsJudgedAfresh() {
+    func momentumCoastsOnTheGesturesAxis() {
         var gesture = ScrollGesture()
 
-        let vertical = gesture.send(deltaX: 0, deltaY: -10, .began)
-        _ = gesture.send(deltaX: 0, deltaY: 0, .ended)
-        let horizontal = gesture.send(deltaX: -10, deltaY: 0, .began)
+        let fling = gesture.send(deltaX: 0.2, deltaY: -30, .begins)
+        // The zero-delta event that ends the finger movement decides nothing.
+        let lift = gesture.send(deltaX: 0, deltaY: 0, .continues)
+        let coast = gesture.send(deltaX: 2, deltaY: -1, .continues)
+        let settle = gesture.send(deltaX: 0.5, deltaY: -0.05, .continues)
 
-        #expect([vertical, horizontal] == [false, true])
+        #expect([fling, lift, coast, settle] == [false, false, false, false])
     }
 
+    /// A tie must not commit the gesture. Locking on the first event alone killed
+    /// panning outright when a horizontal swipe opened with equal deltas.
     @Test
-    func aWheelEventWithNoGestureFollowsItsOwnDominantAxis() {
+    func anAmbiguousStartLetsTheFirstDecisiveEventChooseTheAxis() {
         var gesture = ScrollGesture()
 
-        let vertical = gesture.send(deltaX: 0, deltaY: -3, .changed)
-        let horizontal = gesture.send(deltaX: -3, deltaY: 0, .changed)
+        let tie = gesture.send(deltaX: 4, deltaY: 4, .begins)
+        let decisive = gesture.send(deltaX: 9, deltaY: 1, .continues)
+        let drift = gesture.send(deltaX: 1, deltaY: 3, .continues)
+
+        #expect([tie, decisive, drift] == [false, true, true])
+    }
+
+    /// Covers both a new gesture and a standalone wheel click, which the view maps
+    /// to `.begins` precisely so each one is judged on its own deltas.
+    @Test
+    func aFreshStartDiscardsThePreviousAxis() {
+        var gesture = ScrollGesture()
+
+        let vertical = gesture.send(deltaX: 0, deltaY: -10, .begins)
+        let horizontal = gesture.send(deltaX: -10, deltaY: 0, .begins)
 
         #expect([vertical, horizontal] == [false, true])
     }

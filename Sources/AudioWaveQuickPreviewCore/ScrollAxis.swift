@@ -1,14 +1,16 @@
-/// Locks a scroll gesture to one axis for its whole duration. Trackpad vertical
-/// scrolling carries horizontal drift, so re-measuring the dominant axis per
-/// event leaks into waveform panning mid-scroll — and one such leak redraws
-/// every lane. Decide once when the gesture begins, then keep it.
+/// Locks a scroll gesture to one axis for its whole duration, momentum included.
+/// Trackpad vertical scrolling carries horizontal drift, so re-measuring the
+/// dominant axis per event leaks into waveform panning mid-scroll — and one such
+/// leak redraws every lane. Decide once, then keep it.
 public struct ScrollAxisLatch: Sendable {
-    /// Mapped from `NSEvent.phase`. Momentum and old-style wheel events, which
-    /// carry no phase, arrive as `.changed`.
+    /// What this event means for the decision, not the raw `NSEvent.phase`. A
+    /// plain wheel click has no gesture around it, so it `begins` one of its own.
     public enum Phase: Sendable {
-        case began
-        case changed
-        case ended
+        /// A fresh decision: forget the previous gesture's axis.
+        case begins
+        /// The same gesture as the last event, including the momentum that coasts
+        /// on after the fingers lift. Keep the axis already chosen.
+        case continues
     }
 
     private var latched: Bool?
@@ -17,13 +19,17 @@ public struct ScrollAxisLatch: Sendable {
 
     /// Whether this event should pan the waveform horizontally.
     public mutating func isHorizontal(deltaX: Double, deltaY: Double, phase: Phase) -> Bool {
-        let dominant = abs(deltaX) > abs(deltaY)
-        switch phase {
-        case .began: latched = dominant
-        case .ended: latched = nil
-        case .changed: break
+        if phase == .begins { latched = nil }
+
+        // Equal deltas decide nothing — a horizontal swipe whose first event ties
+        // (or is all zeroes, as `.ended` events are) must not get locked vertical
+        // for the rest of the gesture. Leave the latch open and let the first
+        // event that actually favours an axis set it.
+        if latched == nil, abs(deltaX) != abs(deltaY) {
+            latched = abs(deltaX) > abs(deltaY)
         }
-        // No latch means a wheel event with no gesture around it: judge it alone.
-        return latched ?? dominant
+
+        // Still undecided: leave the event to the enclosing scroll view.
+        return latched ?? false
     }
 }

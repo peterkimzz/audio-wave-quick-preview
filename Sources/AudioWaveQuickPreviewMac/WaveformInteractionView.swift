@@ -61,12 +61,13 @@ final class InteractionNSView: NSView {
         coordinator?.onHorizontalScroll(deltaRatio)
     }
 
+    /// A momentum event arrives after the gesture's `.ended` with an empty `phase`
+    /// but a set `momentumPhase`: it is the tail of the fling that already picked
+    /// an axis, so it continues that decision rather than making a new one. An
+    /// event with neither is a plain wheel click, which stands alone.
     private static func latchPhase(for event: NSEvent) -> ScrollAxisLatch.Phase {
-        switch event.phase {
-        case .began: .began
-        case .ended, .cancelled: .ended
-        default: .changed
-        }
+        let insideGesture = !event.phase.isEmpty || !event.momentumPhase.isEmpty
+        return insideGesture && event.phase != .began ? .continues : .begins
     }
 
     override func mouseDown(with event: NSEvent) {
