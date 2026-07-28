@@ -1,4 +1,5 @@
 import AppKit
+import AudioWaveQuickPreviewCore
 import SwiftUI
 
 struct WaveformInteractionView: NSViewRepresentable {
@@ -27,6 +28,7 @@ struct WaveformInteractionView: NSViewRepresentable {
 
 final class InteractionNSView: NSView {
     weak var coordinator: WaveformInteractionView.Coordinator?
+    private var scrollAxis = ScrollAxisLatch()
     private lazy var magnificationRecognizer = NSMagnificationGestureRecognizer(
         target: self,
         action: #selector(handleMagnification(_:))
@@ -44,13 +46,27 @@ final class InteractionNSView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard bounds.width > 0, abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else {
+        let isHorizontal = scrollAxis.isHorizontal(
+            deltaX: Double(event.scrollingDeltaX),
+            deltaY: Double(event.scrollingDeltaY),
+            phase: Self.latchPhase(for: event)
+        )
+
+        guard bounds.width > 0, isHorizontal else {
             super.scrollWheel(with: event)
             return
         }
 
         let deltaRatio = Double((-event.scrollingDeltaX) / bounds.width)
         coordinator?.onHorizontalScroll(deltaRatio)
+    }
+
+    private static func latchPhase(for event: NSEvent) -> ScrollAxisLatch.Phase {
+        switch event.phase {
+        case .began: .began
+        case .ended, .cancelled: .ended
+        default: .changed
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
