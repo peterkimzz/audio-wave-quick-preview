@@ -29,8 +29,8 @@ struct AudioWaveQuickPreviewMacApp: App {
         // ponytail: DEBUG-only worktree label so parallel instances are distinguishable; release keeps the clean title.
         private static let devWindowTitle: String = {
             let base = "Audio Wave Quick Preview"
-            guard let branch = DevWorktreeLabel.currentBranch() else { return base }
-            return "\(base) — \(branch)"
+            guard let label = DevWorktreeLabel.currentLabel() else { return base }
+            return "\(base) — \(label)"
         }()
     #endif
 
@@ -48,10 +48,10 @@ struct AudioWaveQuickPreviewMacApp: App {
 
 #if DEBUG
     private enum DevWorktreeLabel {
-        /// Reads the current git branch of the worktree this build was compiled from.
+        /// Resolves the branch or detached-worktree label for the source this build came from.
         /// Uses `#filePath` (compile-time source path) to locate the package root, so it
         /// resolves the right worktree regardless of the launch working directory.
-        static func currentBranch() -> String? {
+        static func currentLabel() -> String? {
             let root = URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent()  // AudioWaveQuickPreviewMac (target dir)
                 .deletingLastPathComponent()  // Sources
@@ -74,7 +74,26 @@ struct AudioWaveQuickPreviewMacApp: App {
                 let out = String(bytes: data, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             else { return nil }
-            return (out.isEmpty || out == "HEAD") ? nil : out
+
+            if !out.isEmpty, out != "HEAD" {
+                return out
+            }
+
+            // Codex-managed worktrees are normally detached, so there is no
+            // branch name to show. Use the stable Codex worktree id instead.
+            let components = root.standardizedFileURL.pathComponents
+            if let worktreesIndex = components.lastIndex(of: "worktrees"), worktreesIndex + 1 < components.count {
+                return "worktree-\(components[worktreesIndex + 1])"
+            }
+
+            // Keep detached worktrees created outside Codex distinguishable too.
+
+            let pathTail =
+                components
+                .filter { $0 != "/" }
+                .suffix(2)
+                .joined(separator: "-")
+            return pathTail.isEmpty ? nil : "worktree-\(pathTail)"
         }
     }
 #endif

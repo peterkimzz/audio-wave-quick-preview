@@ -23,6 +23,26 @@ This repository is currently structured as a Swift Package with:
 - `AudioWaveQuickPreviewCore`: pure waveform, viewport, and gain logic with tests
 - `AudioWaveQuickPreviewMac`: SwiftUI macOS app shell
 
+Run the development app directly from the repository root:
+
+```bash
+./scripts/run-app.sh
+```
+
+The script can be called from any directory and accepts audio files as
+arguments, so a file can be opened immediately:
+
+```bash
+./scripts/run-app.sh /path/to/file.wav
+```
+
+It runs the current source as a Debug build. Keep the terminal open while the
+app is running; press `Control-C` in the terminal to stop it.
+
+Debug window titles include the current Git branch, or the Codex Worktree ID
+when the worktree is in detached `HEAD` state. Release builds keep the clean
+app name.
+
 Formatting is handled by `swift format` (bundled with Xcode, configured in
 `.swift-format`) and linting by [SwiftLint](https://github.com/realm/SwiftLint)
 (`brew install swiftlint`, configured in `.swiftlint.yml`). Both run in CI, and
