@@ -5,13 +5,20 @@ Lightweight macOS audio inspection app for quickly previewing a file's waveform 
 ## Current v1 capabilities
 
 - Open `wav`, `mp3`, `m4a`, and `flac`
-- File inspector sidebar: a persistent library of files, searchable, with
-  length / format / sample rate per row
-- Check files in the sidebar to stack them as lanes
-- Normalize every lane to a target loudness (RMS) in one press
+- Create reusable folders such as BGM, Sound Effects, and Ambience; each folder
+  remembers its location and loudness target between launches
+- The `Folders` sidebar is the navigation: selecting a folder immediately loads
+  every supported audio file directly inside it into the lanes
+- Refresh the selected folder after adding or replacing files; subfolders are
+  intentionally not scanned
+- Normalize every loaded file to the selected folder's target loudness (RMS)
+  in one press
+- Adjust the saved target by 0.5 dB while auditioning files, then process the
+  whole selected folder with `Normalize & Export`
+- Write processed copies to the selected folder's `Normalized` subfolder so
+  source files stay untouched and generated files are not reprocessed as inputs
 - Trim each lane by ±1 dB by ear, with a `CLIP` badge when it would clip
 - Audition any lane at its current gain
-- Export gain-adjusted copies of all lanes into a folder; originals untouched
 - Per-lane waveform: click to jump, drag to scrub, pinch to zoom, horizontal
   scroll to pan. Every lane carries a minimap strip underneath; once the lane is
   zoomed in, the strip highlights the visible span and can be dragged to move it
@@ -33,9 +40,9 @@ swift format --in-place --recursive Sources Tests && swiftlint lint --fix
 ```
 
 The app target has no unit-test target (it needs AppKit and a run loop), so the
-paths that write files or cross actors — batch export, per-lane analysis and
-normalize, the library round-trip through `UserDefaults` — are covered by a
-DEBUG-only self-check that runs as the app and exits non-zero on failure:
+paths that write files or cross actors — folder scanning, per-file analysis and
+normalize, and batch export — are covered by a DEBUG-only self-check that runs
+as the app and exits non-zero on failure:
 
 ```bash
 AWQP_SELF_CHECK=/path/to/a/folder/of/wavs swift run AudioWaveQuickPreviewMac
@@ -104,5 +111,10 @@ git push origin v0.1.0
 ## Notes
 
 - The app bundle declares support for `wav`, `mp3`, `m4a`, and `flac`, with a broader `public.audio` viewer role for Finder integration.
+- Folder matching currently uses full-file root-mean-square (RMS) level. This
+  is a transparent, lightweight approximation for game assets, not a standards-
+  based integrated loudness measurement such as LUFS. Long silence before or
+  after a sound can therefore affect the result; audition the folder and move
+  its target slider until the gameplay mix sounds right.
 - GitHub Releases currently ship unsigned internal-distribution builds. Apple code signing and notarization are not configured yet.
 - Tests run in two places: `swift test` (Swift Testing, `Tests/AudioWaveQuickPreviewCoreTests`) and `swift run AudioWaveQuickPreviewSpecs` (a plain executable covering viewport, pyramid, and keyboard behaviour that the test target does not). CI runs both on every pull request.

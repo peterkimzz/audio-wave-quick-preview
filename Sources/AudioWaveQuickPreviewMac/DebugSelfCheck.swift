@@ -7,7 +7,7 @@
 
     /// Headless self-check for the paths that write files or cross actors, which
     /// the Core test target cannot reach: batch export, per-lane analysis and
-    /// normalize, the library round-trip through UserDefaults.
+    /// normalize, and loading every supported file in a configured folder.
     ///
     /// The Mac target has no test target and needs a real run loop for the
     /// detached analysis tasks, so this runs as the app:
@@ -76,36 +76,25 @@
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
             try expect(fixtures.count >= 2, "need at least 2 fixture files, found \(fixtures.count)")
 
-            // --- restore merges with whatever arrived first ---
-            // The restore read is slow enough that a launch argument or a Finder
-            // open usually wins the race; assigning instead of merging dropped it.
-            let sample = fixtures.map { LibraryEntry(url: $0, duration: 1, sampleRate: 48000) }
-            let older = Array(sample.prefix(1))
-            let newer = Array(sample.dropFirst())
-            try expect(
-                LibraryEntry.merged(restored: older, with: []).map(\.url) == older.map(\.url),
-                "merging into an empty library should be the restored list verbatim")
-            try expect(
-                LibraryEntry.merged(restored: older, with: newer).map(\.url)
-                    == (older + newer).map(\.url),
-                "files added before the restore landed must survive, appended after it")
-            try expect(
-                LibraryEntry.merged(restored: sample, with: newer).map(\.url) == sample.map(\.url),
-                "a file present in both lists must not be duplicated")
-
-            // --- library ---
-            model.add(urls: fixtures)
-            try expect(
-                model.entries.count == fixtures.count,
-                "expected \(fixtures.count) entries, got \(model.entries.count)")
-            try expect(model.checked.count == fixtures.count, "added files should arrive checked")
-            model.add(urls: fixtures)
-            try expect(model.entries.count == fixtures.count, "re-adding the same files must not duplicate rows")
-            try expect(
-                LibraryStore.loadPaths().count == fixtures.count,
-                "library did not persist to UserDefaults")
-
+            // --- folder navigation ---
+            // The selected folder is now the source of truth. Assigning the
+            // fixture directory should immediately load all direct child files.
+            guard let folderID = model.folders.first?.id else {
+                throw Failure(description: "the app should start with a default folder")
+            }
+            model.assignFolder(fixtureDir, to: folderID)
             try await waitForLanes(model)
+            try expect(
+                model.lanes.count == fixtures.count,
+                "expected the selected folder to load \(fixtures.count) files, got \(model.lanes.count)")
+
+            // Refreshing the selected folder should keep the same complete set
+            // of direct child files and must not create duplicate lanes.
+            model.scanSelectedFolder()
+            try await waitForLanes(model)
+            try expect(
+                model.lanes.count == fixtures.count,
+                "refresh should reload the folder without duplicating files")
 
             // --- normalize ---
             let beforeGains = model.lanes.map(\.gainDB)
@@ -166,15 +155,6 @@
             }
             model.resetGain(trimTarget)
             try expect(model.lanes[0].gainDB == 0, "reset should return the lane to unity")
-
-            // --- uncheck keeps the analysis cached ---
-            let recheckURL = model.lanes[0].url
-            model.toggle(recheckURL)
-            try expect(model.lanes.count == fixtures.count - 1, "uncheck did not drop the lane")
-            model.toggle(recheckURL)
-            try expect(
-                model.lanes.contains { $0.url == recheckURL && $0.document != nil },
-                "re-checking should reuse the cached analysis, not re-analyze")
 
             // --- viewport: a no-op pan must not republish ---
             // A vertical trackpad scroll drifts sideways, and each leaked pan used to
@@ -267,8 +247,8 @@
             try? FileManager.default.removeItem(at: outputDir)
         }
 
-        /// `exportLanes()` opens a panel, which cannot run headless. This drives the
-        /// same export path with the folder supplied directly.
+        /// The UI supplies the selected folder's `Normalized` directory. This
+        /// drives the same export path with a temporary directory instead.
         private static func exportForTest(model: AppModel, to folder: URL) async throws {
             model.startExport(to: folder)
             for _ in 0..<600 {

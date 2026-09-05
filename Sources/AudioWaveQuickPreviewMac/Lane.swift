@@ -1,7 +1,7 @@
 import AudioWaveQuickPreviewCore
 import Foundation
 
-/// One checked file, staged for batch normalize. Everything numeric delegates to
+/// One audio file loaded from the active folder. Everything numeric delegates to
 /// `GainCalculations` — a lane adds no new math, only per-file state.
 struct Lane: Identifiable {
     /// Zoom-in limit as a fraction of the file. A fixed 5 s floor (what the
@@ -9,7 +9,7 @@ struct Lane: Identifiable {
     /// scales with the clip and always leaves room for 4× zoom.
     private static let maxZoomFactor = 4.0
 
-    let entry: LibraryEntry
+    let entry: AudioFileEntry
     /// Nil until the streaming analysis finishes.
     var document: AudioDocument?
     /// Analysis progress, or nil when nothing is in flight. `WaveformView` renders it.
