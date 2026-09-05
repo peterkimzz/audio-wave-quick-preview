@@ -1,34 +1,18 @@
 import AudioWaveQuickPreviewCore
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
-    @State private var isDropTargeted = false
 
     var body: some View {
         NavigationSplitView {
-            LibrarySidebar(model: model)
+            FolderSidebar(model: model)
                 .navigationSplitViewColumnWidth(min: 210, ideal: 252, max: 360)
         } detail: {
             LaneStack(model: model)
         }
         .frame(minWidth: 900, minHeight: 480)
         .toolbar { toolbarContent }
-        .onAppear {
-            model.handleInitialLaunch()
-        }
-        .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted) { providers in
-            handleDroppedFiles(providers: providers)
-        }
-        .overlay {
-            if isDropTargeted {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.accentColor, lineWidth: 3)
-                    .padding(2)
-                    .allowsHitTesting(false)
-            }
-        }
     }
 
     @ToolbarContentBuilder
@@ -41,7 +25,7 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .help("Loudness (RMS) target every lane is normalized to.")
+            .help("Quick RMS target for the selected folder.")
         }
 
         ToolbarItem {
@@ -49,148 +33,106 @@ struct ContentView: View {
                 model.toggleNormalize()
             }
             .disabled(model.lanes.isEmpty)
-            .help("Set each lane's gain so its average loudness meets the target, without clipping.")
+            .help("Preview the selected folder target on its loaded files without exporting them.")
         }
-
-        ToolbarItem {
-            Button(model.exportLabel) { model.exportLanes() }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(!model.canExport)
-                .help("Write a gain-adjusted copy of every lane into a folder. Originals are untouched.")
-        }
-    }
-
-    private func handleDroppedFiles(providers: [NSItemProvider]) -> Bool {
-        guard !providers.isEmpty else { return false }
-
-        for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                guard let data = item as? Data,
-                    let url = URL(dataRepresentation: data, relativeTo: nil)
-                else {
-                    return
-                }
-
-                Task { @MainActor in
-                    model.add(urls: [url])
-                }
-            }
-        }
-
-        return true
     }
 }
 
-// MARK: - File inspector
+// MARK: - Folder inspector
 
-/// The left sidebar. Checking a row stages that file as a lane; the check is the
-/// selection model, so ⌘-click multi-select would only duplicate it.
-private struct LibrarySidebar: View {
+/// The left sidebar is the app's navigation. Selecting a saved folder loads all
+/// of its supported audio files into lanes immediately.
+private struct FolderSidebar: View {
     @ObservedObject var model: AppModel
 
-    /// The sidebar's own row insets already place "Library" and the rows where
-    /// they belong — overriding them just double-indents. Only the header's
-    /// trailing edge needs help: the section header runs closer to the panel
-    /// edge than its leading inset, leaving "Select All" pinched. Tune this one
-    /// value if the two margins still look uneven.
     private static let headerTrailingInset: CGFloat = 10
 
     var body: some View {
         List {
             Section {
-                ForEach(model.filteredEntries) { entry in
-                    LibraryRow(
-                        entry: entry,
-                        isChecked: model.checked.contains(entry.url),
-                        onToggle: { model.toggle(entry.url) }
+                ForEach(model.folders) { folder in
+                    FolderRow(
+                        folder: folder,
+                        isSelected: model.selectedFolderID == folder.id,
+                        onSelect: { model.selectFolder(folder.id) },
+                        onChooseFolder: { model.chooseFolder(for: folder.id) }
                     )
                     .contextMenu {
-                        Button("Remove from Library") { model.remove(url: entry.url) }
-                        Button("Show in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+                        Button("Choose Folder Location…") { model.chooseFolder(for: folder.id) }
+                        if model.folders.count > 1 {
+                            Divider()
+                            Button("Remove Folder", role: .destructive) {
+                                model.removeFolder(folder.id)
+                            }
                         }
                     }
                 }
             } header: {
                 HStack {
-                    Text("Library")
+                    Text("Folders")
                     Spacer()
-                    Button(model.areAllChecked ? "Deselect All" : "Select All") {
-                        model.toggleSelectAll()
+                    Button {
+                        model.addFolder()
+                    } label: {
+                        Image(systemName: "plus")
                     }
-                    .buttonStyle(.link)
-                    .font(.caption)
-                    .disabled(model.entries.isEmpty)
+                    .buttonStyle(.borderless)
+                    .help("Add a folder")
                 }
                 .padding(.trailing, Self.headerTrailingInset)
                 .padding(.bottom, 6)
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
-        .overlay {
-            if model.entries.isEmpty {
-                ContentUnavailableView(
-                    "No Audio Yet",
-                    systemImage: "waveform",
-                    description: Text("Drop files here or press +.\nwav, mp3, m4a, flac are supported.")
-                )
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 8) {
-                Button {
-                    model.openFilePanel()
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 20, height: 18)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .keyboardShortcut("o")
-                .help("Add audio files to the library.")
-
-                Text(model.selectionSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.bar)
-        }
     }
 }
 
-private struct LibraryRow: View {
-    let entry: LibraryEntry
-    let isChecked: Bool
-    let onToggle: () -> Void
+private struct FolderRow: View {
+    let folder: AudioFolder
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onChooseFolder: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: isChecked ? "checkmark.square.fill" : "square")
-                .foregroundStyle(isChecked ? Color.accentColor : .secondary)
-                .imageScale(.large)
+            Image(systemName: isSelected ? "folder.fill" : "folder")
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(entry.name)
-                    .font(.system(size: 12.5, weight: isChecked ? .semibold : .regular))
+                Text(folder.name)
+                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
-                    .truncationMode(.middle)
 
-                Text(entry.subtitle)
+                Text(detailText)
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             Spacer(minLength: 0)
+
+            Button(action: onChooseFolder) {
+                Image(systemName: folder.folderURL == nil ? "folder.badge.plus" : "folder.badge.gearshape")
+                    .imageScale(.small)
+            }
+            .buttonStyle(.borderless)
+            .help(folder.folderURL == nil ? "Choose folder location" : "Change folder location")
         }
+        .padding(.vertical, 2)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onToggle)
+        .onTapGesture(perform: onSelect)
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isChecked ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
+    }
+
+    private var detailText: String {
+        let target = String(format: "%.1f", folder.targetLoudnessDBFS)
+        if let folderName = folder.folderName {
+            return folderName + " · " + target + " dBFS"
+        }
+        return "No location · " + target + " dBFS"
     }
 }
 
@@ -200,25 +142,101 @@ private struct LaneStack: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 8) {
-                ForEach(model.lanes) { lane in
-                    LaneRow(model: model, lane: lane)
+        VStack(spacing: 0) {
+            FolderHeader(model: model)
+
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(model.lanes) { lane in
+                        LaneRow(model: model, lane: lane)
+                    }
+                }
+                .padding(14)
+            }
+            .background(.background.secondary)
+            .overlay {
+                if model.lanes.isEmpty {
+                    ContentUnavailableView(
+                        model.selectedFolder?.folderURL == nil ? "Choose a Folder" : "Folder is Empty",
+                        systemImage: model.selectedFolder?.folderURL == nil ? "folder.badge.plus" : "waveform.path",
+                        description: Text(emptyDescription)
+                    )
                 }
             }
-            .padding(14)
+            .safeAreaInset(edge: .bottom) { StatusBar(model: model) }
         }
-        .background(.background.secondary)
-        .overlay {
-            if model.lanes.isEmpty {
-                ContentUnavailableView(
-                    "No Lanes",
-                    systemImage: "waveform.path",
-                    description: Text("Check files in the sidebar and they stack up here.")
-                )
+    }
+
+    private var emptyDescription: String {
+        if model.selectedFolder?.folderURL == nil {
+            return "Choose a location for \(model.selectedFolder?.name ?? "this folder") to load its audio files."
+        }
+        return "Put supported audio files directly in this folder, then use Refresh or Normalize & Export."
+    }
+}
+
+private struct FolderHeader: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.selectedFolder?.name ?? "Folders")
+                    .font(.system(size: 15, weight: .semibold))
+                Text(folderText)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 6) {
+                Text("Target")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(
+                    value: $model.targetLoudnessDBFS,
+                    in: GainCalculations.minTargetLoudnessDBFS...GainCalculations.maxTargetLoudnessDBFS,
+                    step: GainCalculations.stepDB
+                )
+                .frame(width: 130)
+                Text(String(format: "%+.1f dBFS", model.targetLoudnessDBFS))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .frame(width: 76, alignment: .trailing)
+                    .help("Saved RMS target for this folder")
+            }
+
+            Button("Choose Location…") {
+                model.chooseFolderForSelectedFolder()
+            }
+            .disabled(model.selectedFolder == nil)
+
+            Button("Refresh") {
+                model.scanSelectedFolder()
+            }
+            .disabled(model.selectedFolder?.folderURL == nil || model.isProcessingFolder)
+
+            Button(model.processFolderLabel) {
+                model.processSelectedFolder()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.canProcessFolder)
         }
-        .safeAreaInset(edge: .bottom) { StatusBar(model: model) }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    private var folderText: String {
+        if let folder = model.selectedFolder?.folderURL {
+            return "Input: \(folder.path)  ·  Output: \(folder.appendingPathComponent("Normalized").path)"
+        }
+        return "Folder location not connected"
     }
 }
 
@@ -249,7 +267,7 @@ private struct LaneRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                Text(LibraryRowFormatter.shortTime(lane.duration))
+                Text(AudioRowFormatter.shortTime(lane.duration))
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
@@ -420,6 +438,12 @@ private struct StatusBar: View {
                     .foregroundStyle(.secondary)
                 Button("Cancel") { model.cancelExport() }
                     .controlSize(.small)
+            } else if model.isProcessingFolder {
+                ProgressView()
+                Text("Analyzing folder files…")
+                    .foregroundStyle(.secondary)
+                Button("Cancel") { model.cancelFolderProcessing() }
+                    .controlSize(.small)
             } else {
                 Text(model.statusSummary)
                 Text("|").foregroundStyle(.tertiary)
@@ -444,7 +468,9 @@ private struct StatusBar: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             } else {
-                Text("Originals are kept; copies are written to the folder you choose")
+                Text(model.outputHint)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
         .font(.caption)

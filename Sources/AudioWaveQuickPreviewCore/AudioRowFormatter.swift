@@ -1,7 +1,7 @@
 import Foundation
 
-/// Text for a file-inspector row: `door-close.wav` / `0:01.2 · wav · 48k`.
-public enum LibraryRowFormatter {
+/// Compact text for an audio-file row: `door-close.wav` / `0:01.2 · wav · 48k`.
+public enum AudioRowFormatter {
     /// `m:ss.t`. Sound effects are routinely under a second, where the
     /// transport's `mm:ss` collapses every one of them to `00:00`.
     public static func shortTime(_ duration: Double) -> String {

@@ -11,7 +11,7 @@ struct AudioWaveQuickPreviewMacApp: App {
         WindowGroup {
             let content = ContentView(model: model)
                 .onAppear {
-                    appDelegate.onOpenFiles = { model.add(urls: $0) }
+                    appDelegate.onOpenFiles = { model.handleExternalOpen(urls: $0) }
                     appDelegate.onKeyboardAction = handleKeyboardAction(_:)
                     #if DEBUG
                         DebugSelfCheck.runIfRequested(model: model)
